@@ -109,6 +109,10 @@ struct HostFeatures {
   // This affects codegen, but it isn't machine state
   ProcessFeaturesHash ProcessFeatures {};
 
+  // The frontend keeps every thread that runs JIT code in hardware TSO mode, so memory ordering does not need to be
+  // emulated. This affects codegen, but like ProcessFeatures it is process state and not part of the machine hash.
+  bool SupportsHardwareTSO {};
+
   // MIDR information
   // Also used for determining number of CPU cores for CPUID
   fextl::vector<uint32_t> CPUMIDRs;

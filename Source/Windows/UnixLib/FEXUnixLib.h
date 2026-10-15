@@ -14,6 +14,7 @@ enum class FEXUnixLibFunctions : uint32_t {
   GetPID,
   JITWriteProtectSupported,
   JITWriteProtect,
+  ProbeHardwareTSO,
   MAX,
 };
 
@@ -76,3 +77,24 @@ struct FEXUnixLib_JITWriteProtect {
   bool Protect;
 };
 static_assert(sizeof(FEXUnixLib_JITWriteProtect) == 1);
+
+enum class FEXUnixLib_HardwareTSOProbeResult : uint32_t {
+  // The trap works on this thread, Trap holds its number.
+  Available,
+  // FEX_HARDWARE_TSO is 0.
+  Disabled,
+  // FEX_HARDWARE_TSO has a value other than 0 or 1.
+  InvalidValue,
+  // The host has no thread_set_x86_64_compat, its stub has an unknown form, or the trap failed (usually because the
+  // cross-architecture entitlement is missing).
+  Unavailable,
+};
+
+struct FEXUnixLib_ProbeHardwareTSOArgs {
+  // Out: the Mach trap number of thread_set_x86_64_compat, which PE code issues directly with svc #0x80 to switch
+  // the calling thread.
+  int64_t Trap;
+  FEXUnixLib_HardwareTSOProbeResult Result;
+  uint32_t pad;
+};
+static_assert(sizeof(FEXUnixLib_ProbeHardwareTSOArgs) == 16, "Must match between the PE and unix sides");

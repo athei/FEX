@@ -29,6 +29,13 @@ bool Available();
 bool TryEnableHardwareTSO();
 
 /**
+ * @brief Checks whether the host can switch single threads to hardware TSO (macOS).
+ *
+ * @return true if the host implements the probe, the result is then in Args.
+ */
+bool ProbeHardwareTSO(FEXUnixLib_ProbeHardwareTSOArgs& Args);
+
+/**
  * @brief Tries to enable kernel unaligned atomic handling if supported.
  *
  * @param Flags Which unaligned types to enable

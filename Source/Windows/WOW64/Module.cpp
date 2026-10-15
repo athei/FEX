@@ -32,6 +32,7 @@ $end_info$
 #include "Windows/Common/Allocator.h"
 #include "Windows/Common/EnvironmentVariablesHandling.h"
 #include "Windows/Common/FEXUnixLib.h"
+#include "Windows/Common/HardwareTSO.h"
 #include "Common/CallRetStack.h"
 #include "Common/JITGuardPage.h"
 #include "Common/Config.h"
@@ -352,6 +353,7 @@ bool HandleUnalignedAccess(CONTEXT* Context) {
 
 void LockJITContext() {
   TLS TLS = GetTLS();
+  FEX::Windows::HardwareTSO::EnsureOn(TLS.ThreadState()->CurrentFrame);
   TLS.CpuArea()->InSimulation = -1;
   LoadStateFromWowContext(TLS.ThreadState());
 }
@@ -439,6 +441,7 @@ public:
 
       Context::FlushThreadStateContext();
       Context::UnlockJITContext();
+      FEX::Windows::HardwareTSO::EnsureOff(Frame);
       ReturnRAX = static_cast<uint64_t>(WineUnixCall(StackArgs->Handle, StackArgs->ID, ULongToPtr(StackArgs->Args)));
       Context::LockJITContext();
       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
@@ -451,6 +454,7 @@ public:
       Context::FlushThreadStateContext();
       Context::UnlockJITContext();
       Wow64ProcessPendingCrossProcessItems();
+      FEX::Windows::HardwareTSO::EnsureOff(Frame);
       ReturnRAX = static_cast<uint64_t>(Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(ReturnRSP + 4)));
       Context::LockJITContext();
       Frame->State.gregs[FEXCore::X86State::REG_RAX] = ReturnRAX;
@@ -526,13 +530,14 @@ void BTCpuProcessInit() {
   {
     auto HostFeatures =
       FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine, FEXCore::HostFeatures::HostTypeEnum::Wow64, FEX::Windows::UnixLib::GetPID());
+    HostFeatures.SupportsHardwareTSO = FEX::Windows::HardwareTSO::Init();
     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
   }
 
   CTX->SetSignalDelegator(SignalDelegator.get());
   CTX->SetSyscallHandler(SyscallHandler.get());
   CTX->InitCore();
-  Context::HandlerConfig.emplace(*CTX);
+  Context::HandlerConfig.emplace();
   InvalidationTracker.emplace(*CTX, Threads);
   ImageTracker.emplace(*CTX, false);
 
@@ -604,6 +609,7 @@ void BTCpuThreadInit() {
   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
 
   FEX::Windows::CallRetStack::InitializeThread(Thread);
+  FEX::Windows::HardwareTSO::InitThread(Frame);
 
   const auto TLS = GetTLS();
   TLS.ThreadState() = Thread;
@@ -805,6 +811,10 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
 
 NTSTATUS BTCpuResetToConsistentState(EXCEPTION_POINTERS* Ptrs) {
   if (BTCpuResetToConsistentStateImpl(Ptrs)) {
+    // Resuming JIT code does not pass through LockJITContext.
+    if (auto Thread = GetTLS().ThreadState(); Thread && IsAddressInJit(Ptrs->ContextRecord->Pc)) {
+      FEX::Windows::HardwareTSO::EnsureOn(Thread->CurrentFrame);
+    }
     NtContinue(Ptrs->ContextRecord, FALSE);
   }
 

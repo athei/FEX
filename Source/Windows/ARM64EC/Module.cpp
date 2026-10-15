@@ -31,6 +31,7 @@ $end_info$
 #include "Windows/Common/Allocator.h"
 #include "Windows/Common/EnvironmentVariablesHandling.h"
 #include "Windows/Common/FEXUnixLib.h"
+#include "Windows/Common/HardwareTSO.h"
 #include "Common/CallRetStack.h"
 #include "Common/JITGuardPage.h"
 #include "Common/Config.h"
@@ -96,6 +97,12 @@ NTSTATUS NtAllocateVirtualMemoryExNative(HANDLE, PVOID*, SIZE_T*, ULONG, ULONG, 
 NTSTATUS NtProtectVirtualMemoryNative(HANDLE, PVOID*, SIZE_T*, ULONG, ULONG*);
 NTSTATUS NtRaiseExceptionNative(EXCEPTION_RECORD*, ARM64_NT_CONTEXT*, BOOL);
 static fextl::string AppConfigName {};
+
+// Hardware TSO hooks, see Module.S
+extern void* TSOSyscallDispatcher;
+extern void* TSOUnixCallDispatcher;
+void* TSOOrigSyscallDispatcher;
+void* TSOOrigUnixCallDispatcher;
 
 [[noreturn]]
 void JumpSetStack(uintptr_t PC, uintptr_t SP);
@@ -352,6 +359,37 @@ bool InitSyscalls() {
   FillNtDllLUTs(NtDll);
   PatchCallChecker();
   return true;
+}
+
+// Switches threads off hardware TSO where native code does real work, see HardwareTSO.h. The JIT entry points switch
+// them on again. Only the *Native syscalls (WineSyscallDispatcher) and FEX's unix calls (UnixLib::Init) bypass these
+// hooks. FEX's other syscalls go through them and leave the thread on only because InSimulation is set while FEX runs
+// inside JIT execution: code that makes an ntdll call and then resumes JIT code without an entry point must keep
+// InSimulation set (see TSOSyscallDispatcher in Module.S).
+void InstallHardwareTSOHooks(HMODULE NtDll) {
+  if (!FEX::Windows::HardwareTSO::PerThread()) {
+    return;
+  }
+
+  // Both are writable ntdll data that the ARM64EC syscall and unix call thunks load on every call. Modules that copy
+  // them before this point bypass the hooks, which only keeps their threads on longer.
+  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_syscall_dispatcher"))) {
+    TSOOrigSyscallDispatcher = *Ptr;
+    *Ptr = &TSOSyscallDispatcher;
+  }
+
+  if (const auto Ptr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_unix_call_dispatcher_arm64ec"))) {
+    TSOOrigUnixCallDispatcher = *Ptr;
+    *Ptr = &TSOUnixCallDispatcher;
+  }
+}
+
+// Called before resuming a context with NtContinueNative, which bypasses the JIT entry points.
+void EnsureHardwareTSOForContinue(const ThreadCPUArea CPUArea, uint64_t Pc) {
+  auto* Thread = CPUArea.ThreadState();
+  if (Thread && (IsDispatcherAddress(Pc) || CTX->IsAddressInCodeBuffer(Thread, Pc))) {
+    FEX::Windows::HardwareTSO::EnsureOn(Thread->CurrentFrame);
+  }
 }
 
 void HandleImageMap(uint64_t Address, bool MainImage = false) {
@@ -669,6 +707,9 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);
   Exception::LoadStateFromECContext(Thread, *Context);
+
+  // BeginSimulation enters the dispatcher next.
+  FEX::Windows::HardwareTSO::EnsureOn(Thread->CurrentFrame);
 }
 
 NTSTATUS ProcessInit() {
@@ -708,13 +749,14 @@ NTSTATUS ProcessInit() {
   {
     auto HostFeatures =
       FEX::Windows::CPUFeatures::FetchHostFeatures(IsWine, FEXCore::HostFeatures::HostTypeEnum::Arm64ec, FEX::Windows::UnixLib::GetPID());
+    HostFeatures.SupportsHardwareTSO = FEX::Windows::HardwareTSO::Init();
     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
   }
 
   CTX->SetSignalDelegator(SignalDelegator.get());
   CTX->SetSyscallHandler(SyscallHandler.get());
   CTX->InitCore();
-  Exception::HandlerConfig.emplace(*CTX);
+  Exception::HandlerConfig.emplace();
   InvalidationTracker.emplace(*CTX, Threads);
   ImageTracker.emplace(*CTX, false);
 
@@ -746,6 +788,7 @@ NTSTATUS ProcessInit() {
     std::this_thread::sleep_for(std::chrono::seconds(StartupSleep()));
   }
 
+  InstallHardwareTSOHooks(NtDll);
   return STATUS_SUCCESS;
 }
 
@@ -858,6 +901,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
         Cont = OvercommitTracker->HandleAccessViolation(FaultAddress);
       }
       if (Cont) {
+        EnsureHardwareTSOForContinue(GetCPUArea(), NativeContext->Pc);
         NtContinueNative(NativeContext, false);
       }
     }
@@ -874,6 +918,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
   }
 
   if (Cont) {
+    EnsureHardwareTSOForContinue(CPUArea, NativeContext->Pc);
     NtContinueNative(NativeContext, false);
   }
 
@@ -1103,6 +1148,9 @@ NTSTATUS ThreadInit() {
     }
   }
 
+  // Set before SuspendDoorbell below, through which Module.S reads the state.
+  FEX::Windows::HardwareTSO::InitThread(Thread->CurrentFrame);
+
   CPUArea.ThreadState() = Thread;
   CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
   return STATUS_SUCCESS;
@@ -1150,6 +1198,10 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
     }
   }
   auto ThreadState = CPUArea.ThreadState();
+
+  // The doorbell is part of the frame freed below. The hardware TSO hooks in Module.S read through this pointer on
+  // the syscalls that follow (NtTerminateThread), so they must not see a stale one.
+  CPUArea.Area->SuspendDoorbell = nullptr;
 
   delete GetFrontendThreadData(ThreadState);
 

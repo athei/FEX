@@ -435,12 +435,20 @@ struct CpuStateFrame {
 #ifdef _WIN32
   // Set by the kernel on ARM64EC whenever the JIT should cooperatively suspend running guest code.
   uint32_t SuspendDoorbell {};
+
+  // Hardware TSO state of this thread, owned by the Windows frontend (see Source/Windows/Common/HardwareTSO.h).
+  // The ARM64EC frontend reaches it from assembly through the pointer to SuspendDoorbell, so it must follow it.
+  uint32_t HardwareTSOState {};
 #endif
 
   // Pointers that the JIT needs to load to remove relocations
   JITPointers Pointers;
 };
 static_assert(offsetof(CpuStateFrame, State) == 0, "CPUState must be first member in CpuStateFrame");
+#ifdef _WIN32
+static_assert(offsetof(CpuStateFrame, HardwareTSOState) == offsetof(CpuStateFrame, SuspendDoorbell) + 4,
+              "HardwareTSOState must directly follow SuspendDoorbell");
+#endif
 static_assert(offsetof(CpuStateFrame, Pointers) % 8 == 0, "JITPointers need to be aligned to 8 bytes");
 static_assert(offsetof(CpuStateFrame, Pointers) + sizeof(CpuStateFrame::Pointers) <= 32760, "JITPointers maximum pointer needs to be less "
                                                                                             "than architecture maximum 32768");

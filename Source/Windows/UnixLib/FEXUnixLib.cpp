@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <cstdint>
+#include <cstring>
+#include <cstdlib>
 #include <type_traits>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +11,7 @@
 #include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
+#include <mach/kern_return.h>
 #include <pthread.h>
 #endif
 #include <unistd.h>
@@ -52,12 +55,62 @@ constexpr NTSTATUS STATUS_INTERNAL_ERROR = 0xC00000E5;
 #endif
 
 #ifdef __APPLE__
-// macOS has no prctl. Every call fails, so hardware TSO and kernel unaligned-atomic control
-// report as unsupported and FEX falls back to its software implementations, and VMA naming
-// does nothing.
+// macOS has no prctl. Every call fails, so kernel unaligned-atomic control reports as
+// unsupported and FEX falls back to its software implementation, and VMA naming does nothing.
 static int prctl(int, ...) {
   errno = ENOSYS;
   return -1;
+}
+#endif
+
+#ifdef __APPLE__
+// Apple silicon provides x86 memory ordering (TSO) per thread through the x86_64 compat mode,
+// which requires the cross-architecture entitlement. The trap only switches the calling thread,
+// so the PE side switches every thread itself around JIT code and issues the trap directly
+// instead of through a unix call. This only checks that the trap works and returns its number.
+extern "C" kern_return_t thread_set_x86_64_compat(uint32_t enable) __attribute__((weak_import));
+
+// Returns the Mach trap number that the libsystem_kernel stub passes in x16, or 0 if the stub is
+// not the expected `movn x16, #imm; svc #0x80; ret`. The PE side issues the trap from its own
+// code instead of calling the stub, because Wine takes a suspended ARM64EC thread whose PC is
+// outside any PE module for one running x64 code.
+static int64_t GetHardwareTSOTrapNumber() {
+  const auto Code = reinterpret_cast<const uint32_t*>(&thread_set_x86_64_compat);
+  if ((Code[0] & 0xffe0001f) != 0x92800010 || Code[1] != 0xd4001001 || Code[2] != 0xd65f03c0) {
+    return 0;
+  }
+  return ~static_cast<int64_t>((Code[0] >> 5) & 0xffff);
+}
+
+static FEXUnixLib_HardwareTSOProbeResult ProbeHardwareTSO() {
+  // On by default: FEX_HARDWARE_TSO=0 keeps software TSO, unset or 1 uses hardware TSO.
+  const char* Env = getenv("FEX_HARDWARE_TSO");
+  if (Env && !strcmp(Env, "0")) {
+    return FEXUnixLib_HardwareTSOProbeResult::Disabled;
+  }
+  if (Env && strcmp(Env, "1")) {
+    return FEXUnixLib_HardwareTSOProbeResult::InvalidValue;
+  }
+  if (!thread_set_x86_64_compat || !GetHardwareTSOTrapNumber()) {
+    return FEXUnixLib_HardwareTSOProbeResult::Unavailable;
+  }
+  // Leave this thread off like every other thread. If switching off fails it stays on, which is
+  // still correct, but the process then keeps software TSO.
+  if (thread_set_x86_64_compat(1) != KERN_SUCCESS || thread_set_x86_64_compat(0) != KERN_SUCCESS) {
+    return FEXUnixLib_HardwareTSOProbeResult::Unavailable;
+  }
+  return FEXUnixLib_HardwareTSOProbeResult::Available;
+}
+
+static NTSTATUS FEXUnixLib_ProbeHardwareTSOHandler(void* _Args) {
+  auto Args = reinterpret_cast<FEXUnixLib_ProbeHardwareTSOArgs*>(_Args);
+  Args->Result = ProbeHardwareTSO();
+  Args->Trap = Args->Result == FEXUnixLib_HardwareTSOProbeResult::Available ? GetHardwareTSOTrapNumber() : 0;
+  return STATUS_SUCCESS;
+}
+#else
+static NTSTATUS FEXUnixLib_ProbeHardwareTSOHandler(void* _Args) {
+  return STATUS_NOT_SUPPORTED;
 }
 #endif
 
@@ -247,6 +300,7 @@ extern "C" const unixlib_entry_t __wine_unix_call_funcs[] = {
   FEXUnixLib_GetPIDHandler,
   FEXUnixLib_JITWriteProtectSupportedHandler,
   FEXUnixLib_JITWriteProtectHandler,
+  FEXUnixLib_ProbeHardwareTSOHandler,
 };
 
 static_assert(sizeof(__wine_unix_call_funcs) / sizeof(__wine_unix_call_funcs[0]) == ToUnderlying(FEXUnixLibFunctions::MAX));

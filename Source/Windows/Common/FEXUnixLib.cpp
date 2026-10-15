@@ -82,7 +82,13 @@ bool Init(HMODULE NtDll) {
   }
 
 #ifdef ARCHITECTURE_arm64ec
-  UnixCallDispatcherDirect = *reinterpret_cast<decltype(__wine_unix_call_dispatcher)*>(Sym);
+  // __wine_unix_call_dispatcher points to an ARM64EC thunk that calls through __wine_unix_call_dispatcher_arm64ec.
+  // Call the target of the latter directly, so that FEX's own unix calls bypass any wrapper installed there later.
+  if (const auto ECSym = GetProcAddress(NtDll, "__wine_unix_call_dispatcher_arm64ec")) {
+    UnixCallDispatcherDirect = *reinterpret_cast<decltype(__wine_unix_call_dispatcher)*>(ECSym);
+  } else {
+    UnixCallDispatcherDirect = *reinterpret_cast<decltype(__wine_unix_call_dispatcher)*>(Sym);
+  }
   UnixCallDispatcher = TrampolineCall;
 #else
   UnixCallDispatcher = *reinterpret_cast<decltype(__wine_unix_call_dispatcher)*>(Sym);
@@ -113,6 +119,14 @@ bool TryEnableHardwareTSO() {
   };
 
   return Call(FEXUnixLibFunctions::SetHardwareTSOControl, &Args) == STATUS_SUCCESS;
+}
+
+bool ProbeHardwareTSO(FEXUnixLib_ProbeHardwareTSOArgs& Args) {
+  if (!Available()) {
+    return false;
+  }
+
+  return Call(FEXUnixLibFunctions::ProbeHardwareTSO, &Args) == STATUS_SUCCESS;
 }
 
 bool SetKernelUnalignedAtomicControl(uint64_t Flags) {

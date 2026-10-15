@@ -450,6 +450,10 @@ public:
     return MemcpyAtomicTSOEmulationEnabled;
   }
 
+  bool IsHardwareTSOSupported() const {
+    return SupportsHardwareTSO;
+  }
+
   void SetHardwareTSOSupport(bool HardwareTSOSupported) override {
     SupportsHardwareTSO = HardwareTSOSupported;
     UpdateAtomicTSOEmulationConfig();

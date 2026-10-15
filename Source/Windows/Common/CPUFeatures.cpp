@@ -64,6 +64,13 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine, FEXCore::HostF
 
   CPUFeaturesFromRegistry Features(Key);
 
+  if (HostType == FEXCore::HostFeatures::HostTypeEnum::Arm64ec) {
+    // Native ARM64EC code requires FPCR.AH and FPCR.NEP to be clear, so with AFP every transition between the JIT and
+    // native code has to write FPCR twice. ARM64EC processes make these transitions far more often than the AFP code
+    // sequences save, so don't use AFP by default. HostFeatures=enableafp still turns it back on.
+    Features.RemoveFeature(FEX::CPUFeatures::Feature::AFP);
+  }
+
   uint64_t CTR = ReadRegU64(Key, "CP 5801");
   uint64_t MIDR = ReadRegU64(Key, "CP 4000");
 

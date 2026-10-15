@@ -599,6 +599,15 @@ void FetchHostFeatures(FEX::CPUFeatures& Features, FEXCore::HostFeatures& HostFe
 
   HandleErrata(&HostFeatures, MIDR);
   OverrideFeatures(&HostFeatures, ForceSVEWidth());
+
+  // RPRES only increases the precision of FRECPE and FRSQRTE when FPCR.AH is set, which FEX only does with AFP.
+  // Likewise BFCVTN only ignores the rounding mode, rounding to nearest even, and flushes denormal inputs to zero, as
+  // x86's VCVTNEPS2BF16 does, when FPCR.AH is set; otherwise it follows the guest's MXCSR rounding and FTZ.
+  // Without BF16 CPUID doesn't report AVX_NE_CONVERT.
+  if (!HostFeatures.SupportsAFP) {
+    HostFeatures.SupportsRPRES = false;
+    HostFeatures.SupportsBF16 = false;
+  }
 }
 
 FEXCore::HostFeatures FetchHostFeatures(bool Is64BitMode) {

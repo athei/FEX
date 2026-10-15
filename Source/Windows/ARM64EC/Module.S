@@ -116,10 +116,16 @@ BeginSimulation:
   // Expects the target code address in x9
 .global ExitFunctionEC
 ExitFunctionEC:
-  // Clear any the AFP NEP and AH bits in FPCR as native code won't expect their behaviour.
+  // Clear the AFP NEP and AH bits in FPCR as native code won't expect their behaviour. Skip the write when they are
+  // already clear, which is always the case unless AFP is in use, as FPCR writes are slow on some hardware. NZCV still
+  // holds the guest flags here, so test the bits without touching it.
   mrs x17, fpcr
+  tbnz x17, #1, 1f // AH
+  tbz x17, #2, 2f // NEP
+1:
   and x17, x17, #~6 // NEP + AH
   msr fpcr, x17
+2:
   ldr x17, [x18, #0x1788] // TEB->ChpeV2CpuAreaInfo
   strb wzr, [x17, #0x0] // ChpeV2CpuAreaInfo->InSimulation
   ldr x17, [x17, #0x20] // ChpeV2CpuAreaInfo->SuspendDoorbell

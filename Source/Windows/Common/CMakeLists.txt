@@ -11,6 +11,7 @@ add_library(CommonWindows STATIC
   CPUFeatures.cpp
   EnvironmentVariablesHandling.cpp
   FEXUnixLib.cpp
+  HardwareTSO.cpp
   SHMStats.cpp
   InvalidationTracker.cpp
   ImageTracker.cpp

@@ -102,7 +102,8 @@ ContextImpl::ContextImpl(const FEXCore::HostFeatures& Features)
     }
   }
 
-  // Track atomic TSO emulation configuration.
+  // Track atomic TSO emulation configuration. This must be final before the disk cache is initialized below.
+  SupportsHardwareTSO = Features.SupportsHardwareTSO;
   UpdateAtomicTSOEmulationConfig();
 
 #ifndef _WIN32

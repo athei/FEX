@@ -1425,7 +1425,7 @@
       ]
     },
     "fld dword [rax]": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 14,
       "Comment": [
         "0xd9 !11b /0"
       ],
@@ -1438,6 +1438,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1587,7 +1588,7 @@
       ]
     },
     "fld st0": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 14,
       "Comment": [
         "0xd9 11b 0xc0 /0"
       ],
@@ -1600,6 +1601,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1608,7 +1610,7 @@
       ]
     },
     "fld st1": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc1 /0"
       ],
@@ -1623,6 +1625,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1631,7 +1634,7 @@
       ]
     },
     "fld st2": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc2 /0"
       ],
@@ -1646,6 +1649,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1654,7 +1658,7 @@
       ]
     },
     "fld st3": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc3 /0"
       ],
@@ -1669,6 +1673,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1677,7 +1682,7 @@
       ]
     },
     "fld st4": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc4 /0"
       ],
@@ -1692,6 +1697,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1700,7 +1706,7 @@
       ]
     },
     "fld st5": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc5 /0"
       ],
@@ -1715,6 +1721,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1723,7 +1730,7 @@
       ]
     },
     "fld st6": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xc6 /0"
       ],
@@ -1738,6 +1745,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1746,7 +1754,7 @@
       ]
     },
     "fld st7": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xd9 11b 0xc7 /0"
       ],
@@ -1758,6 +1766,7 @@
         "ldr d2, [x21, #1056]",
         "strb w20, [x28, #1051]",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -1775,7 +1784,7 @@
       ]
     },
     "fxch st0, st1": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xc9 /1"
       ],
@@ -1789,7 +1798,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1800,7 +1811,7 @@
       ]
     },
     "fxch st0, st2": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xca /1"
       ],
@@ -1814,7 +1825,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1825,7 +1838,7 @@
       ]
     },
     "fxch st0, st3": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xcb /1"
       ],
@@ -1839,7 +1852,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1850,7 +1865,7 @@
       ]
     },
     "fxch st0, st4": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xcc /1"
       ],
@@ -1864,7 +1879,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1875,7 +1892,7 @@
       ]
     },
     "fxch st0, st5": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xcd /1"
       ],
@@ -1889,7 +1906,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1900,7 +1919,7 @@
       ]
     },
     "fxch st0, st6": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xce /1"
       ],
@@ -1914,7 +1933,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1925,7 +1946,7 @@
       ]
     },
     "fxch st0, st7": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 19,
       "Comment": [
         "0xd9 11b 0xcf /1"
       ],
@@ -1939,7 +1960,9 @@
         "ldr d3, [x22, #1056]",
         "strb wzr, [x28, #1049]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -1957,7 +1980,7 @@
       "ExpectedArm64ASM": []
     },
     "fchs": {
-      "ExpectedInstructionCount": 5,
+      "ExpectedInstructionCount": 6,
       "Comment": [
         "0xd9 11b 0xe0 /4"
       ],
@@ -1966,11 +1989,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d2, [x20, #1056]",
         "fneg v2.2d, v2.2d",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fabs": {
-      "ExpectedInstructionCount": 5,
+      "ExpectedInstructionCount": 6,
       "Comment": [
         "0xd9 11b 0xe1 /4"
       ],
@@ -1979,7 +2003,8 @@
         "add x20, x28, x20, lsl #4",
         "ldr d2, [x20, #1056]",
         "fabs d2, d2",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "ftst": {
@@ -2061,7 +2086,7 @@
       ]
     },
     "fld1": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 14,
       "Comment": [
         "0xd9 11b 0xe8 /5"
       ],
@@ -2074,6 +2099,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2082,7 +2108,7 @@
       ]
     },
     "fldl2t": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xe9 /5"
       ],
@@ -2098,6 +2124,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2106,7 +2133,7 @@
       ]
     },
     "fldl2e": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xea /5"
       ],
@@ -2122,6 +2149,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2130,7 +2158,7 @@
       ]
     },
     "fldpi": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xeb /5"
       ],
@@ -2146,6 +2174,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2154,7 +2183,7 @@
       ]
     },
     "fldlg2": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xec /5"
       ],
@@ -2170,6 +2199,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2178,7 +2208,7 @@
       ]
     },
     "fldln2": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xed /5"
       ],
@@ -2194,6 +2224,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2202,7 +2233,7 @@
       ]
     },
     "fldz": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 14,
       "Comment": [
         "0xd9 11b 0xee /5"
       ],
@@ -2215,6 +2246,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2223,7 +2255,7 @@
       ]
     },
     "f2xm1": {
-      "ExpectedInstructionCount": 10,
+      "ExpectedInstructionCount": 11,
       "Comment": [
         "0xd9 11b 0xf0 /6"
       ],
@@ -2237,11 +2269,12 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d2, d0",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fyl2x": {
-      "ExpectedInstructionCount": 21,
+      "ExpectedInstructionCount": 22,
       "Comment": [
         "0xd9 11b 0xf1 /6"
       ],
@@ -2262,6 +2295,7 @@
         "fmov d2, d0",
         "strb w21, [x28, #1051]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2270,7 +2304,7 @@
       ]
     },
     "fptan": {
-      "ExpectedInstructionCount": 23,
+      "ExpectedInstructionCount": 25,
       "Comment": [
         "0xd9 11b 0xf2 /6"
       ],
@@ -2292,7 +2326,9 @@
         "strb w20, [x28, #1051]",
         "add x22, x28, x20, lsl #4",
         "str d3, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2301,7 +2337,7 @@
       ]
     },
     "fpatan": {
-      "ExpectedInstructionCount": 21,
+      "ExpectedInstructionCount": 22,
       "Comment": [
         "0xd9 11b 0xf3 /6"
       ],
@@ -2322,6 +2358,7 @@
         "fmov d2, d0",
         "strb w21, [x28, #1051]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2330,7 +2367,7 @@
       ]
     },
     "fxtract": {
-      "ExpectedInstructionCount": 40,
+      "ExpectedInstructionCount": 42,
       "Comment": [
         "0xd9 11b 0xf4 /6"
       ],
@@ -2367,7 +2404,9 @@
         "strb w20, [x28, #1051]",
         "add x22, x28, x20, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x8",
         "sub w20, w22, w20",
@@ -2378,7 +2417,7 @@
       ]
     },
     "fprem1": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xf5 /6"
       ],
@@ -2398,7 +2437,8 @@
         "ldr x30, [sp], #16",
         "fmov d2, d0",
         "strb wzr, [x28, #1050]",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fdecstp": {
@@ -2428,7 +2468,7 @@
       ]
     },
     "fprem": {
-      "ExpectedInstructionCount": 16,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xd9 11b 0xf8 /7"
       ],
@@ -2448,11 +2488,12 @@
         "ldr x30, [sp], #16",
         "fmov d2, d0",
         "strb wzr, [x28, #1050]",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fyl2xp1": {
-      "ExpectedInstructionCount": 21,
+      "ExpectedInstructionCount": 22,
       "Comment": [
         "0xd9 11b 0xf9 /7"
       ],
@@ -2473,6 +2514,7 @@
         "fmov d2, d0",
         "strb w21, [x28, #1051]",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2494,7 +2536,7 @@
       ]
     },
     "fsincos": {
-      "ExpectedInstructionCount": 27,
+      "ExpectedInstructionCount": 29,
       "Comment": [
         "0xd9 11b 0xfb /7"
       ],
@@ -2520,7 +2562,9 @@
         "strb w20, [x28, #1051]",
         "add x22, x28, x20, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "str d3, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -2529,7 +2573,7 @@
       ]
     },
     "frndint": {
-      "ExpectedInstructionCount": 5,
+      "ExpectedInstructionCount": 6,
       "Comment": [
         "0xd9 11b 0xfc /7"
       ],
@@ -2538,11 +2582,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d2, [x20, #1056]",
         "frinti d2, d2",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fscale": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xd9 11b 0xfd /7"
       ],
@@ -2561,11 +2606,12 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d2, d0",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fsin": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xd9 11b 0xfe /7"
       ],
@@ -2580,11 +2626,12 @@
         "ldr x30, [sp], #16",
         "fmov d2, d0",
         "strb wzr, [x28, #1050]",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcos": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xd9 11b 0xff /7"
       ],
@@ -2599,7 +2646,8 @@
         "ldr x30, [sp], #16",
         "fmov d2, d0",
         "strb wzr, [x28, #1050]",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fiadd dword [rax]": {
@@ -2749,7 +2797,7 @@
       ]
     },
     "fcmovb st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xda 11b 0xc0 /0"
       ],
@@ -2760,11 +2808,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc1 /0"
       ],
@@ -2779,11 +2828,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc2 /0"
       ],
@@ -2798,11 +2848,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc3 /0"
       ],
@@ -2817,11 +2868,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc4 /0"
       ],
@@ -2836,11 +2888,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc5 /0"
       ],
@@ -2855,11 +2908,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc6 /0"
       ],
@@ -2874,11 +2928,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovb st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc7 /0"
       ],
@@ -2893,11 +2948,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xda 11b 0xc8 /1"
       ],
@@ -2908,11 +2964,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xc9 /1"
       ],
@@ -2927,11 +2984,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xca /1"
       ],
@@ -2946,11 +3004,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xcb /1"
       ],
@@ -2965,11 +3024,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xcc /1"
       ],
@@ -2984,11 +3044,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xcd /1"
       ],
@@ -3003,11 +3064,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xce /1"
       ],
@@ -3022,11 +3084,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmove st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xcf /1"
       ],
@@ -3041,11 +3104,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xda 11b 0xd0 /0"
       ],
@@ -3056,11 +3120,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd1 /0"
       ],
@@ -3075,11 +3140,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd2 /0"
       ],
@@ -3094,11 +3160,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd3 /0"
       ],
@@ -3113,11 +3180,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd4 /0"
       ],
@@ -3132,11 +3200,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd5 /0"
       ],
@@ -3151,11 +3220,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd6 /0"
       ],
@@ -3170,11 +3240,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovbe st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xda 11b 0xd7 /0"
       ],
@@ -3189,11 +3260,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st0": {
-      "ExpectedInstructionCount": 10,
+      "ExpectedInstructionCount": 11,
       "Comment": [
         "0xda 11b 0xd8 /1"
       ],
@@ -3207,11 +3279,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st1": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xd9 /1"
       ],
@@ -3229,11 +3302,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st2": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xda /1"
       ],
@@ -3251,11 +3325,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st3": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xdb /1"
       ],
@@ -3273,11 +3348,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st4": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xdc /1"
       ],
@@ -3295,11 +3371,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st5": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xdd /1"
       ],
@@ -3317,11 +3394,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st6": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xde /1"
       ],
@@ -3339,11 +3417,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovu st0, st7": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xda 11b 0xdf /1"
       ],
@@ -3361,7 +3440,8 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fucompp": {
@@ -3401,7 +3481,7 @@
       ]
     },
     "fild dword [rax]": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 14,
       "Comment": [
         "0xdf !11b /5"
       ],
@@ -3414,6 +3494,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -3479,7 +3560,7 @@
       ]
     },
     "fld tword [rax]": {
-      "ExpectedInstructionCount": 21,
+      "ExpectedInstructionCount": 22,
       "Comment": [
         "0xdb !11b /5"
       ],
@@ -3500,6 +3581,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -3537,7 +3619,7 @@
       ]
     },
     "fcmovnb st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xdb 11b 0xc0 /0"
       ],
@@ -3548,11 +3630,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc1 /0"
       ],
@@ -3567,11 +3650,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc2 /0"
       ],
@@ -3586,11 +3670,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc3 /0"
       ],
@@ -3605,11 +3690,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc4 /0"
       ],
@@ -3624,11 +3710,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc5 /0"
       ],
@@ -3643,11 +3730,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc6 /0"
       ],
@@ -3662,11 +3750,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnb st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc7 /0"
       ],
@@ -3681,11 +3770,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xdb 11b 0xc8 /1"
       ],
@@ -3696,11 +3786,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xc9 /1"
       ],
@@ -3715,11 +3806,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xca /1"
       ],
@@ -3734,11 +3826,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xcb /1"
       ],
@@ -3753,11 +3846,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xcc /1"
       ],
@@ -3772,11 +3866,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xcd /1"
       ],
@@ -3791,11 +3886,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xce /1"
       ],
@@ -3810,11 +3906,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovne st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xcf /1"
       ],
@@ -3829,11 +3926,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st0": {
-      "ExpectedInstructionCount": 7,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xdb 11b 0xd0 /2"
       ],
@@ -3844,11 +3942,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st1": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd1 /2"
       ],
@@ -3863,11 +3962,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st2": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd2 /2"
       ],
@@ -3882,11 +3982,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st3": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd3 /2"
       ],
@@ -3901,11 +4002,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st4": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd4 /2"
       ],
@@ -3920,11 +4022,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st5": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd5 /2"
       ],
@@ -3939,11 +4042,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st6": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd6 /2"
       ],
@@ -3958,11 +4062,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnbe st0, st7": {
-      "ExpectedInstructionCount": 11,
+      "ExpectedInstructionCount": 12,
       "Comment": [
         "0xdb 11b 0xd7 /2"
       ],
@@ -3977,11 +4082,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st0": {
-      "ExpectedInstructionCount": 10,
+      "ExpectedInstructionCount": 11,
       "Comment": [
         "0xdb 11b 0xd8 /3"
       ],
@@ -3995,11 +4101,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d3, [x20, #1056]",
         "bsl v2.16b, v3.16b, v3.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st1": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xd9 /3"
       ],
@@ -4017,11 +4124,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st2": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xda /3"
       ],
@@ -4039,11 +4147,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st3": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xdb /3"
       ],
@@ -4061,11 +4170,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st4": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xdc /3"
       ],
@@ -4083,11 +4193,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st5": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xdd /3"
       ],
@@ -4105,11 +4216,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st6": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xde /3"
       ],
@@ -4127,11 +4239,12 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fcmovnu st0, st7": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xdf /3"
       ],
@@ -4149,7 +4262,8 @@
         "add x20, x28, x20, lsl #4",
         "ldr d4, [x20, #1056]",
         "bsl v2.16b, v3.16b, v4.16b",
-        "str d2, [x20, #1056]"
+        "str d2, [x20, #1056]",
+        "str xzr, [x20, #1064]"
       ]
     },
     "fnclex": {
@@ -5426,7 +5540,7 @@
       ]
     },
     "fld qword [rax]": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd !11b /0"
       ],
@@ -5438,6 +5552,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -5446,7 +5561,7 @@
       ]
     },
     "fisttp qword [rax]": {
-      "ExpectedInstructionCount": 13,
+      "ExpectedInstructionCount": 17,
       "Comment": [
         "0xdd !11b /1"
       ],
@@ -5454,8 +5569,12 @@
         "ldrb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "ldr d2, [x21, #1056]",
+        "ldr d3, [x21, #1064]",
+        "scvtf d4, d3",
+        "fcmeq d4, d2, d4",
         "fcvtzs v2.2d, v2.2d",
-        "str d2, [x4]",
+        "bsl v4.8b, v3.8b, v2.8b",
+        "str d4, [x4]",
         "add w21, w20, #0x1 (1)",
         "and w21, w21, #0x7",
         "strb w21, [x28, #1051]",
@@ -5950,7 +6069,7 @@
       ]
     },
     "fst st0": {
-      "ExpectedInstructionCount": 9,
+      "ExpectedInstructionCount": 10,
       "Comment": [
         "0xdd 11b 0xd0 /2"
       ],
@@ -5959,6 +6078,7 @@
         "add x21, x28, x20, lsl #4",
         "ldr d2, [x21, #1056]",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -5967,7 +6087,7 @@
       ]
     },
     "fst st1": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd1 /2"
       ],
@@ -5979,6 +6099,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -5987,7 +6108,7 @@
       ]
     },
     "fst st2": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd2 /2"
       ],
@@ -5999,6 +6120,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6007,7 +6129,7 @@
       ]
     },
     "fst st3": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd3 /2"
       ],
@@ -6019,6 +6141,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6027,7 +6150,7 @@
       ]
     },
     "fst st4": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd4 /2"
       ],
@@ -6039,6 +6162,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6047,7 +6171,7 @@
       ]
     },
     "fst st5": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd5 /2"
       ],
@@ -6059,6 +6183,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6067,7 +6192,7 @@
       ]
     },
     "fst st6": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd6 /2"
       ],
@@ -6079,6 +6204,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6087,7 +6213,7 @@
       ]
     },
     "fst st7": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd7 /2"
       ],
@@ -6099,6 +6225,7 @@
         "and w20, w20, #0x7",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6107,7 +6234,7 @@
       ]
     },
     "fstp st0": {
-      "ExpectedInstructionCount": 12,
+      "ExpectedInstructionCount": 13,
       "Comment": [
         "0xdd 11b 0xd8 /3"
       ],
@@ -6119,6 +6246,7 @@
         "and w22, w22, #0x7",
         "strb w22, [x28, #1051]",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -6127,7 +6255,7 @@
       ]
     },
     "fstp st1": {
-      "ExpectedInstructionCount": 15,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xdd 11b 0xd9 /3"
       ],
@@ -6140,6 +6268,7 @@
         "strb w21, [x28, #1051]",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6150,7 +6279,7 @@
       ]
     },
     "fstp st2": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xda /3"
       ],
@@ -6165,6 +6294,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6175,7 +6305,7 @@
       ]
     },
     "fstp st3": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xdb /3"
       ],
@@ -6190,6 +6320,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6200,7 +6331,7 @@
       ]
     },
     "fstp st4": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xdc /3"
       ],
@@ -6215,6 +6346,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6225,7 +6357,7 @@
       ]
     },
     "fstp st5": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xdd /3"
       ],
@@ -6240,6 +6372,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6250,7 +6383,7 @@
       ]
     },
     "fstp st6": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xde /3"
       ],
@@ -6265,6 +6398,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -6275,7 +6409,7 @@
       ]
     },
     "fstp st7": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 18,
       "Comment": [
         "0xdd 11b 0xdf /3"
       ],
@@ -6290,6 +6424,7 @@
         "and w21, w21, #0x7",
         "add x22, x28, x21, lsl #4",
         "str d2, [x22, #1056]",
+        "str xzr, [x22, #1064]",
         "ldrb w22, [x28, #1202]",
         "mov w23, #0x1",
         "lsl w21, w23, w21",
@@ -8132,7 +8267,7 @@
       ]
     },
     "fild word [rax]": {
-      "ExpectedInstructionCount": 14,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdf !11b /0"
       ],
@@ -8146,6 +8281,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",
@@ -8211,7 +8347,7 @@
       ]
     },
     "fbld tword [rax]": {
-      "ExpectedInstructionCount": 28,
+      "ExpectedInstructionCount": 29,
       "Comment": [
         "0xdf !11b /4"
       ],
@@ -8239,6 +8375,7 @@
         "strb w20, [x28, #1051]",
         "add x21, x28, x20, lsl #4",
         "str d2, [x21, #1056]",
+        "str xzr, [x21, #1064]",
         "ldrb w21, [x28, #1202]",
         "mov w22, #0x1",
         "lsl w20, w22, w20",

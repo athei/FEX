@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <cstdint>
 #include <type_traits>
+#include <errno.h>
 #include <fcntl.h>
 #include <string>
 #include <sys/mman.h>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
 #include <unistd.h>
 
 #include "FEXUnixLib.h"
@@ -45,6 +51,16 @@ constexpr NTSTATUS STATUS_INTERNAL_ERROR = 0xC00000E5;
 #define PR_SET_VMA_ANON_NAME 0
 #endif
 
+#ifdef __APPLE__
+// macOS has no prctl. Every call fails, so hardware TSO and kernel unaligned-atomic control
+// report as unsupported and FEX falls back to its software implementations, and VMA naming
+// does nothing.
+static int prctl(int, ...) {
+  errno = ENOSYS;
+  return -1;
+}
+#endif
+
 static NTSTATUS FEXUnixLib_SetHardwareTSOControlHandler(void* _Args) {
   auto Args = reinterpret_cast<const FEXUnixLib_SetHardwareTSOControlArgs*>(_Args);
   if (Args->Enable) {
@@ -77,7 +93,7 @@ static NTSTATUS FEXUnixLib_SetVMANameHandler(void* _Args) {
 }
 
 constexpr static int USER_PERMS = S_IRWXU | S_IRWXG | S_IRWXO;
-static inline void* InitializeSHM(uint32_t MapSize, uint32_t MaxSize) {
+static inline void* InitializeSHM(uint32_t MapSize, uint32_t MaxSize, uint64_t MinAddress) {
   void* Base {};
   const std::string Name = "fex-" + std::to_string(getpid()) + "-stats";
   int fd = shm_open(Name.c_str(), O_CREAT | O_TRUNC | O_RDWR, USER_PERMS);
@@ -95,8 +111,14 @@ static inline void* InitializeSHM(uint32_t MapSize, uint32_t MaxSize) {
   // 1 page: 99 slots
   // 1 MB: 26211 slots
   // 128 MB: 3355440 slots
-  Base = mmap(nullptr, MaxSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  // MinAddress is only a hint, see FEXUnixLib_MapFileHandler. Without a mapping profiling stays off.
+  Base = mmap(reinterpret_cast<void*>(MinAddress), MaxSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
   if (Base == MAP_FAILED) {
+    Base = nullptr;
+    goto err;
+  }
+  if (reinterpret_cast<uint64_t>(Base) < MinAddress) {
+    ::munmap(Base, MaxSize);
     Base = nullptr;
     goto err;
   }
@@ -115,6 +137,9 @@ static inline void* InitializeSHM(uint32_t MapSize, uint32_t MaxSize) {
 
 err:
   close(fd);
+  if (!Base) {
+    shm_unlink(Name.c_str());
+  }
 
   return Base;
 }
@@ -150,7 +175,7 @@ err:
 static NTSTATUS FEXUnixLib_GetSHMStatsVMAHandler(void* _Args) {
   auto Args = reinterpret_cast<FEXUnixLib_GetSHMStatsVMA*>(_Args);
   if (Args->SHMBase == nullptr) {
-    Args->SHMBase = InitializeSHM(Args->MapSize, Args->MaxSize);
+    Args->SHMBase = InitializeSHM(Args->MapSize, Args->MaxSize, Args->MinAddress);
     return Args->SHMBase ? STATUS_SUCCESS : STATUS_INTERNAL_ERROR;
   }
 
@@ -167,9 +192,17 @@ static NTSTATUS FEXUnixLib_MapFileHandler(void* _Args) {
   auto Args = reinterpret_cast<FEXUnixLib_MapFile*>(_Args);
   // could find a way to dedupe with DiskCacheFilemapper in FEXInterpreter but it's barely any code
   // fd was already duped by Wine handle translation
-  Args->Result = mmap(nullptr, Args->MapSize, PROT_READ, MAP_SHARED | MAP_NORESERVE, Args->FD, 0);
+  // Wine doesn't track host mappings, so one placed in the address space the guest relies on would block it there.
+  // MinAddress is passed as a hint only, as MAP_FIXED would replace whatever is mapped there. The kernel may place the
+  // mapping elsewhere, so a mapping below MinAddress is undone and the cache reads the file instead.
+  Args->Result = mmap(reinterpret_cast<void*>(Args->MinAddress), Args->MapSize, PROT_READ, MAP_SHARED | MAP_NORESERVE, Args->FD, 0);
   close(Args->FD);
   if (Args->Result == (void*)-1) {
+    Args->Result = nullptr;
+    return STATUS_INTERNAL_ERROR;
+  }
+  if (reinterpret_cast<uint64_t>(Args->Result) < Args->MinAddress) {
+    munmap(Args->Result, Args->MapSize);
     Args->Result = nullptr;
     return STATUS_INTERNAL_ERROR;
   }
@@ -181,6 +214,28 @@ static NTSTATUS FEXUnixLib_GetPIDHandler(void* _Args) {
   Args->Result = ::getpid();
   return STATUS_SUCCESS;
 }
+
+#ifdef __APPLE__
+// Wine backs FEX's code buffers with MAP_JIT memory on macOS (MEM_EXTENDED_PARAMETER_WINE_UNIX_JIT),
+// which is writable or executable per thread. FEX switches the calling thread around code writes.
+static NTSTATUS FEXUnixLib_JITWriteProtectSupportedHandler(void* _Args) {
+  return pthread_jit_write_protect_supported_np() ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS FEXUnixLib_JITWriteProtectHandler(void* _Args) {
+  pthread_jit_write_protect_np(reinterpret_cast<const FEXUnixLib_JITWriteProtect*>(_Args)->Protect);
+  return STATUS_SUCCESS;
+}
+#else
+static NTSTATUS FEXUnixLib_JITWriteProtectSupportedHandler(void* _Args) {
+  return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS FEXUnixLib_JITWriteProtectHandler(void* _Args) {
+  return STATUS_NOT_SUPPORTED;
+}
+#endif
+
 extern "C" const unixlib_entry_t __wine_unix_call_funcs[] = {
   FEXUnixLib_SetHardwareTSOControlHandler,
   FEXUnixLib_SetKernelUnalignedAtomicControlHandler,
@@ -190,6 +245,8 @@ extern "C" const unixlib_entry_t __wine_unix_call_funcs[] = {
   FEXUnixLib_DeleteSHMStatsFileHandler,
   FEXUnixLib_MapFileHandler,
   FEXUnixLib_GetPIDHandler,
+  FEXUnixLib_JITWriteProtectSupportedHandler,
+  FEXUnixLib_JITWriteProtectHandler,
 };
 
 static_assert(sizeof(__wine_unix_call_funcs) / sizeof(__wine_unix_call_funcs[0]) == ToUnderlying(FEXUnixLibFunctions::MAX));

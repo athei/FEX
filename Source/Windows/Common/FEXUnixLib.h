@@ -38,6 +38,13 @@ bool TryEnableHardwareTSO();
 bool SetKernelUnalignedAtomicControl(uint64_t Flags);
 
 void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPControl Control);
+
+/**
+ * @brief Switches the calling thread's access to JIT code memory between writable and executable.
+ * Installed as FEXCore's JIT write-protect hook when the host maps JIT code with per-thread W^X
+ * (macOS MAP_JIT).
+ */
+void JITWriteProtect(bool Protect);
 void VirtualName(const char* Name, const void* Ptr, size_t Size);
 
 struct SHMSlotResult {

@@ -8,6 +8,7 @@
 #define __WINESRC__
 #include <winternl.h>
 #include <libloaderapi.h>
+#include "Allocator.h"
 #include "FEXUnixLib.h"
 #include "Priv.h"
 
@@ -89,6 +90,12 @@ bool Init(HMODULE NtDll) {
 
   // Give a log saying that the unix lib was loaded.
   LogMan::Msg::IFmt("FEX: Loaded FEXUnixLib");
+
+  // Wine backs JIT code buffers with per-thread W^X memory on hosts that support it (macOS MAP_JIT).
+  if (Call(FEXUnixLibFunctions::JITWriteProtectSupported, nullptr) == STATUS_SUCCESS) {
+    FEX::Windows::Allocator::EnableJITWriteProtect();
+    LogMan::Msg::IFmt("FEX: Using per-thread W^X JIT code memory");
+  }
   return true;
 }
 
@@ -118,6 +125,14 @@ bool SetKernelUnalignedAtomicControl(uint64_t Flags) {
   };
 
   return Call(FEXUnixLibFunctions::SetKernelUnalignedAtomicControl, &Args) == STATUS_SUCCESS;
+}
+
+void JITWriteProtect(bool Protect) {
+  FEXUnixLib_JITWriteProtect Args {
+    .Protect = Protect,
+  };
+
+  Call(FEXUnixLibFunctions::JITWriteProtect, &Args);
 }
 
 void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPControl Control) {
@@ -159,6 +174,7 @@ SHMSlotResult AllocateSHMSlots(void* SHMBase, uint32_t MapSize, uint32_t MaxSize
     .SHMBase = SHMBase,
     .MapSize = MapSize,
     .MaxSize = MaxSize,
+    .MinAddress = FEX::Windows::Allocator::LowestFEXAddress,
   };
 
   if (Call(FEXUnixLibFunctions::GetSHMStatsVMA, &Args) == STATUS_SUCCESS) {
@@ -184,6 +200,7 @@ void* MapFile(HANDLE FileHandle, uint64_t MapSize) {
     FEXUnixLib_MapFile Args {
       .FD = -1,
       .MapSize = MapSize,
+      .MinAddress = FEX::Windows::Allocator::LowestFEXAddress,
     };
 
     // this is a dup equivalent

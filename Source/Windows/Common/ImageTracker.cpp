@@ -22,6 +22,7 @@
 #include <winternl.h>
 #include <xxhash.h>
 
+#include "Allocator.h"
 #include "Handle.h"
 #include "Module.h"
 #include "Priv.h"
@@ -255,8 +256,15 @@ void ImageTracker::LoadAOTImages(MappedImageInfo& ImageInfo) {
       // MEM_EXTENDED_PARAMETER ECParam {};
       // ECParam.Type = MemExtendedParameterAttributeFlags;
       // ECParam.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
-      if (NT_SUCCESS(NtMapViewOfSection(*SectionHandle, NtCurrentProcess(), &LoadAddress, 0, 0, nullptr, &MappedSize, ViewUnmap,
-                                        MEM_RESERVE | MEM_TOP_DOWN, PAGE_EXECUTE_READ))) {
+      // Keep the cache out of the address space the guest relies on like FEX's other allocations, see LowestFEXAddress
+      MEM_ADDRESS_REQUIREMENTS AddrReq {};
+      AddrReq.LowestStartingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::LowestFEXAddress);
+      AddrReq.HighestEndingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::HighestFEXAddress);
+      MEM_EXTENDED_PARAMETER AddrReqParam {};
+      AddrReqParam.Type = MemExtendedParameterAddressRequirements;
+      AddrReqParam.Pointer = &AddrReq;
+      if (NT_SUCCESS(NtMapViewOfSectionEx(*SectionHandle, NtCurrentProcess(), &LoadAddress, nullptr, &MappedSize, MEM_RESERVE | MEM_TOP_DOWN,
+                                          PAGE_EXECUTE_READ, &AddrReqParam, 1))) {
 
         auto CacheSpan = std::span {static_cast<std::byte*>(LoadAddress), MappedSize};
         auto MappedCache = CTX.GetCodeCache().LoadCache(CacheSpan, ImageInfo.Info, ImageInfo.SectionInfo.FileStartVA);

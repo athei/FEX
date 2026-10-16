@@ -25,6 +25,7 @@ $end_info$
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/AllocatorHooks.h>
 #include <FEXCore/Utils/CompilerDefs.h>
 #include <FEXCore/Utils/EnumUtils.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -506,6 +507,7 @@ void Arm64JITCore::Op_Unhandled(const IR::IROp_Header* IROp, IR::Ref Node) {
   }
 }
 
+// Block delinkers only run from GuestToHostMap::InvalidateRange, inside its JIT write window.
 static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record, bool Call) {
   uintptr_t JumpThunkStartAddress = reinterpret_cast<uintptr_t>(Record) - 0x10;
   uintptr_t CallerAddress = JumpThunkStartAddress + Record->CallerOffset;
@@ -578,6 +580,9 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
 
   // Lock here is necessary to prevent simultaneous linking and delinking
   auto lk = Thread->LookupCache->AcquireWriteLock();
+
+  // The callsite and link record are in the CodeBuffer
+  FEXCore::Allocator::ScopedJITWrite JITWrite;
 
   // For non-calls, this would extend into the block's code, however that's fine as an out-of-range adr would never
   // be generated avoiding any false positives.
@@ -1132,6 +1137,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     CodeData.HostCodeOffset = CodeData.BlockBegin - CurrentCodeBuffer->GetBufferBase();
 
     // Copy over CodeBuffer contents
+    FEXCore::Allocator::ScopedJITWrite JITWrite;
     memcpy(AllocatedInfo.BufferAllocationOffset, TempCodeBuffer, CodeData.Size);
   }
 
@@ -1177,7 +1183,10 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
   auto AllocatedInfo = AllocateCodeBufferInSharedCache(HostBytes.size());
 
   uint8_t* Dest = AllocatedInfo.BufferAllocationOffset;
-  memcpy(Dest, HostBytes.data(), HostBytes.size());
+  {
+    FEXCore::Allocator::ScopedJITWrite JITWrite;
+    memcpy(Dest, HostBytes.data(), HostBytes.size());
+  }
   ClearICache(Dest, HostBytes.size());
 
   CPUBackend::CompiledCode Result;

@@ -10,44 +10,49 @@
 #include <winternl.h>
 #include <windows.h>
 #include <processenv.h>
+#include "../Allocator.h"
 #include "../Priv.h"
 
-#ifndef _M_ARM64EC
 namespace {
-SYSTEM_BASIC_INFORMATION BasicInfo;
-
-void InitBasicInfo() {
-  NtQuerySystemInformation(SystemEmulationBasicInformation, &BasicInfo, sizeof(BasicInfo), nullptr);
-}
-
-__attribute__((used, section(".CRT$FEXH"))) void (*_InitBasicInfo)(void) = InitBasicInfo;
-
-MEM_ADDRESS_REQUIREMENTS MakeWOW64AddressReqs() {
+#ifdef _M_ARM64EC
+MEM_ADDRESS_REQUIREMENTS MakeAddressReqs() {
   MEM_ADDRESS_REQUIREMENTS Reqs {};
-  Reqs.LowestStartingAddress = reinterpret_cast<void*>(BasicInfo.HighestUserAddress & ~(BasicInfo.AllocationGranularity - 1));
+  Reqs.LowestStartingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::LowestFEXAddress);
+  Reqs.HighestEndingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::HighestFEXAddress);
   return Reqs;
 }
-} // namespace
+#else
+SYSTEM_BASIC_INFORMATION BasicInfo;
+
+// Limits allocations to outside the 32-bit user address space
+MEM_ADDRESS_REQUIREMENTS MakeAddressReqs() {
+  // Queried on first use rather than from a CRT initializer, as rpmalloc maps its first spans before those run.
+  // The first call happens during single-threaded process init.
+  if (!BasicInfo.HighestUserAddress) {
+    NtQuerySystemInformation(SystemEmulationBasicInformation, &BasicInfo, sizeof(BasicInfo), nullptr);
+  }
+  MEM_ADDRESS_REQUIREMENTS Reqs {};
+  Reqs.LowestStartingAddress = reinterpret_cast<void*>(BasicInfo.HighestUserAddress & ~(BasicInfo.AllocationGranularity - 1));
+  Reqs.HighestEndingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::HighestFEXAddress);
+  return Reqs;
+}
 #endif
+} // namespace
 
 DLLEXPORT_FUNC(void*, VirtualAlloc, (void* lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect)) {
   NTSTATUS Status;
-#ifndef _M_ARM64EC
   if (!lpAddress) {
-    // Add address requirements for WOW64 to limit allocations to outside the 32-bit user address space
+    // Add address requirements to keep FEX's allocations out of the address space the guest relies on
     MEM_EXTENDED_PARAMETER ExtParam {};
-    MEM_ADDRESS_REQUIREMENTS AddrReq = MakeWOW64AddressReqs();
+    MEM_ADDRESS_REQUIREMENTS AddrReq = MakeAddressReqs();
 
     ExtParam.Type = MemExtendedParameterAddressRequirements;
     ExtParam.Pointer = &AddrReq;
 
     Status = NtAllocateVirtualMemoryEx(NtCurrentProcess(), &lpAddress, &dwSize, flAllocationType, flProtect, &ExtParam, 1);
   } else {
-#endif
     Status = NtAllocateVirtualMemory(NtCurrentProcess(), &lpAddress, 0, &dwSize, flAllocationType, flProtect);
-#ifndef _M_ARM64EC
   }
-#endif
   if (Status) {
     SetLastError(RtlNtStatusToDosError(Status));
     return nullptr;
@@ -74,28 +79,47 @@ DLLEXPORT_FUNC(void*, VirtualAlloc2,
                (HANDLE Process, void* BaseAddress, SIZE_T Size, ULONG AllocationType, ULONG PageProtection,
                 MEM_EXTENDED_PARAMETER* ExtendedParameters, ULONG ParameterCount)) {
   NTSTATUS Status;
-#ifndef _M_ARM64EC
-  if (!BaseAddress) {
-    // Add address requirements for WOW64 to limit allocations to outside the 32-bit user address space
+  // A parameter array that is missing although the count says otherwise is passed on unchanged for ntdll to reject
+  if (!BaseAddress && (ExtendedParameters || !ParameterCount)) {
+    // Add address requirements to keep FEX's allocations out of the address space the guest relies on
     auto* NewExtParams = reinterpret_cast<MEM_EXTENDED_PARAMETER*>(alloca((ParameterCount + 1) * sizeof(MEM_EXTENDED_PARAMETER)));
     if (ExtendedParameters && ParameterCount > 0) {
       memcpy(NewExtParams, ExtendedParameters, ParameterCount * sizeof(MEM_EXTENDED_PARAMETER));
     }
 
-    MEM_ADDRESS_REQUIREMENTS AddrReq = MakeWOW64AddressReqs();
+    MEM_ADDRESS_REQUIREMENTS AddrReq = MakeAddressReqs();
+    ULONG NewParameterCount = ParameterCount;
+    MEM_EXTENDED_PARAMETER* AddrReqParam = nullptr;
+    for (ULONG i = 0; i < ParameterCount; i++) {
+      if (NewExtParams[i].Type == MemExtendedParameterAddressRequirements) {
+        AddrReqParam = &NewExtParams[i];
+      }
+    }
 
-    NewExtParams[ParameterCount].Type = MemExtendedParameterAddressRequirements;
-    NewExtParams[ParameterCount].Pointer = &AddrReq;
+    // A parameter type may only be passed once, so merge with the caller's requirements: the narrower range of the two
+    // (a null HighestEndingAddress means no limit), and the caller's alignment
+    if (AddrReqParam) {
+      const auto* CallerReq = static_cast<const MEM_ADDRESS_REQUIREMENTS*>(AddrReqParam->Pointer);
+      AddrReq.Alignment = CallerReq->Alignment;
+      if (CallerReq->HighestEndingAddress && CallerReq->HighestEndingAddress < AddrReq.HighestEndingAddress) {
+        AddrReq.HighestEndingAddress = CallerReq->HighestEndingAddress;
+      }
+      if (CallerReq->LowestStartingAddress > AddrReq.LowestStartingAddress) {
+        AddrReq.LowestStartingAddress = CallerReq->LowestStartingAddress;
+      }
+    } else {
+      AddrReqParam = &NewExtParams[NewParameterCount++];
+      *AddrReqParam = {};
+      AddrReqParam->Type = MemExtendedParameterAddressRequirements;
+    }
+    AddrReqParam->Pointer = &AddrReq;
 
     Status = NtAllocateVirtualMemoryEx(Process ? Process : NtCurrentProcess(), &BaseAddress, &Size, AllocationType, PageProtection,
-                                       NewExtParams, ParameterCount + 1);
+                                       NewExtParams, NewParameterCount);
   } else {
-#endif
     Status = NtAllocateVirtualMemoryEx(Process ? Process : NtCurrentProcess(), &BaseAddress, &Size, AllocationType, PageProtection,
                                        ExtendedParameters, ParameterCount);
-#ifndef _M_ARM64EC
   }
-#endif
   if (Status) {
     SetLastError(RtlNtStatusToDosError(Status));
     return nullptr;

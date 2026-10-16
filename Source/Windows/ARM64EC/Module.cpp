@@ -87,12 +87,12 @@ uint32_t NtDllRedirectionLUTSize;
 // Wine doesn't support issuing direct system calls with SVC, and like Windows it also doesn't have 'stable' syscall numbers
 void* WineSyscallDispatcher;
 uint64_t WineNtContinueSyscallId;
-uint64_t WineNtAllocateVirtualMemorySyscallId;
+uint64_t WineNtAllocateVirtualMemoryExSyscallId;
 uint64_t WineNtProtectVirtualMemorySyscallId;
 uint64_t WineNtRaiseExceptionSyscallId;
 
 NTSTATUS NtContinueNative(ARM64_NT_CONTEXT* NativeContext, BOOLEAN Alert);
-NTSTATUS NtAllocateVirtualMemoryNative(HANDLE, PVOID*, ULONG_PTR, SIZE_T*, ULONG, ULONG);
+NTSTATUS NtAllocateVirtualMemoryExNative(HANDLE, PVOID*, SIZE_T*, ULONG, ULONG, MEM_EXTENDED_PARAMETER*, ULONG);
 NTSTATUS NtProtectVirtualMemoryNative(HANDLE, PVOID*, SIZE_T*, ULONG, ULONG*);
 NTSTATUS NtRaiseExceptionNative(EXCEPTION_RECORD*, ARM64_NT_CONTEXT*, BOOL);
 static fextl::string AppConfigName {};
@@ -190,8 +190,15 @@ void FillNtDllLUTs(HMODULE NtDll) {
   NtDllRedirectionLUTSize = std::prev(RedirectionTableEnd)->Source + 1;
 
   SIZE_T AllocSize = NtDllRedirectionLUTSize * sizeof(uint32_t);
-  NtAllocateVirtualMemoryNative(NtCurrentProcess(), reinterpret_cast<void**>(&NtDllRedirectionLUT), 0, &AllocSize, MEM_COMMIT | MEM_RESERVE,
-                                PAGE_READWRITE);
+  // Allocated before FEX's VirtualAlloc can be used, apply its limits by hand (see LowestFEXAddress, HighestFEXAddress)
+  MEM_ADDRESS_REQUIREMENTS AddrReq {};
+  AddrReq.LowestStartingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::LowestFEXAddress);
+  AddrReq.HighestEndingAddress = reinterpret_cast<void*>(FEX::Windows::Allocator::HighestFEXAddress);
+  MEM_EXTENDED_PARAMETER ExtParam {};
+  ExtParam.Type = MemExtendedParameterAddressRequirements;
+  ExtParam.Pointer = &AddrReq;
+  NtAllocateVirtualMemoryExNative(NtCurrentProcess(), reinterpret_cast<void**>(&NtDllRedirectionLUT), &AllocSize,
+                                  MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE, &ExtParam, 1);
   for (auto It = RedirectionTableBegin; It != RedirectionTableEnd; It++) {
     NtDllRedirectionLUT[It->Source] = It->Destination;
   }
@@ -260,8 +267,8 @@ void ParseWineSyscallNumbers(HMODULE NtDll) {
     uint32_t CurSyscallId = static_cast<uint32_t>(std::distance(SyscallTable.begin(), it));
     if (strcmp(it->Name, "NtContinue") == 0) {
       WineNtContinueSyscallId = CurSyscallId;
-    } else if (strcmp(it->Name, "NtAllocateVirtualMemory") == 0) {
-      WineNtAllocateVirtualMemorySyscallId = CurSyscallId;
+    } else if (strcmp(it->Name, "NtAllocateVirtualMemoryEx") == 0) {
+      WineNtAllocateVirtualMemoryExSyscallId = CurSyscallId;
     } else if (strcmp(it->Name, "NtProtectVirtualMemory") == 0) {
       WineNtProtectVirtualMemorySyscallId = CurSyscallId;
     } else if (strcmp(it->Name, "NtRaiseException") == 0) {
@@ -328,7 +335,7 @@ bool InitSyscalls() {
     // NT syscall numbers may change between versions, so we need to find the numbers
     // for the syscalls we need ahead of time.
     WineNtContinueSyscallId = GetNTSyscallNo(NtDll, "NtContinue");
-    WineNtAllocateVirtualMemorySyscallId = GetNTSyscallNo(NtDll, "NtAllocateVirtualMemory");
+    WineNtAllocateVirtualMemoryExSyscallId = GetNTSyscallNo(NtDll, "NtAllocateVirtualMemoryEx");
     WineNtProtectVirtualMemorySyscallId = GetNTSyscallNo(NtDll, "NtProtectVirtualMemory");
     WineNtRaiseExceptionSyscallId = GetNTSyscallNo(NtDll, "NtRaiseException");
 
@@ -336,7 +343,7 @@ bool InitSyscalls() {
     // of our static table. This is almost certainly not going
     // to happen, but failing here will make debugging easier later on.
     const uint64_t SyscallTableSize = SyscallTableEnd - SyscallTable;
-    if (std::max({WineNtContinueSyscallId, WineNtAllocateVirtualMemorySyscallId, WineNtProtectVirtualMemorySyscallId,
+    if (std::max({WineNtContinueSyscallId, WineNtAllocateVirtualMemoryExSyscallId, WineNtProtectVirtualMemorySyscallId,
                   WineNtRaiseExceptionSyscallId}) >= SyscallTableSize) {
       return false;
     }

@@ -18,7 +18,7 @@ static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
 
 CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
   : AllocatedSize(Size) {
-  Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
+  Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAllocJIT(Size));
   LOGMAN_THROW_A_FMT(!!Ptr, "Couldn't allocate code buffer");
 
   // Protect the last page of the allocated buffer to trigger SIGSEGV on write access

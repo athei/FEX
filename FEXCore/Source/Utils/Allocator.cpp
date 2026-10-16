@@ -393,6 +393,13 @@ void VirtualTHPNOP(const void* Ptr, size_t Size, THPControl Control) {}
 
 VirtualNamePtr VirtualName {VirtualNameNOP};
 VirtualTHPPtr VirtualTHPControl {VirtualTHPNOP};
+JITWriteProtectPtr JITWriteProtect {};
+JITAllocPtr JITAlloc {};
+
+void SetJITHooks(JITWriteProtectPtr WriteProtect, JITAllocPtr Alloc) {
+  JITWriteProtect = WriteProtect;
+  JITAlloc = Alloc;
+}
 
 void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
   VirtualName = Ptrs.VirtualName;

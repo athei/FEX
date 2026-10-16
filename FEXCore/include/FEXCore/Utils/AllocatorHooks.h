@@ -46,6 +46,15 @@ FEX_DEFAULT_VISIBILITY void SetupHooks(size_t PageSize, HookPtrs Ptrs);
 FEX_DEFAULT_VISIBILITY void ClearHooks();
 
 #ifdef _WIN32
+// Set when the host backs JIT code buffers with per-thread W^X memory (MAP_JIT on macOS):
+// JITAlloc allocates such memory, JITWriteProtect switches the calling thread's access to it
+// between writable (false) and executable (true).
+using JITWriteProtectPtr = void (*)(bool Protect);
+using JITAllocPtr = void* (*)(size_t Size);
+FEX_DEFAULT_VISIBILITY extern JITWriteProtectPtr JITWriteProtect;
+FEX_DEFAULT_VISIBILITY extern JITAllocPtr JITAlloc;
+FEX_DEFAULT_VISIBILITY void SetJITHooks(JITWriteProtectPtr WriteProtect, JITAllocPtr Alloc);
+
 inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Commit = true) {
   // Allocate top-down to avoid polluting the lower VA space, as even on 64-bit some programs (i.e. LuaJIT) require allocations below 4GB.
   DWORD Flags = (Commit ? MEM_COMMIT : 0) | MEM_RESERVE | MEM_TOP_DOWN;
@@ -65,6 +74,37 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
 inline void* VirtualAlloc(size_t Size, bool Execute = false, bool Commit = true) {
   return VirtualAlloc(nullptr, Size, Execute, Commit);
 }
+
+// Allocates committed RWX memory for JIT code. When JITWriteProtect is set, the host maps it with
+// per-thread write/execute access: every write to it must happen inside a ScopedJITWrite.
+inline void* VirtualAllocJIT(size_t Size) {
+  if (JITAlloc) {
+    if (auto Ptr = JITAlloc(Size)) {
+      return Ptr;
+    }
+    LogMan::Msg::EFmt("Failed to allocate per-thread W^X JIT memory, falling back to RWX");
+  }
+  return VirtualAlloc(nullptr, Size, true, true);
+}
+
+// Makes JIT code memory writable for the calling thread while in scope. The thread can't execute
+// JIT code meanwhile. Scopes must not nest: the inner one would make the memory executable again
+// on exit (there's no per-thread nesting count as TLS isn't usable in FEX's Windows modules).
+class ScopedJITWrite final {
+public:
+  ScopedJITWrite() {
+    if (JITWriteProtect) {
+      JITWriteProtect(false);
+    }
+  }
+  ~ScopedJITWrite() {
+    if (JITWriteProtect) {
+      JITWriteProtect(true);
+    }
+  }
+  ScopedJITWrite(const ScopedJITWrite&) = delete;
+  ScopedJITWrite& operator=(const ScopedJITWrite&) = delete;
+};
 
 inline void VirtualFree(void* Ptr, size_t Size) {
   ::VirtualFree(Ptr, 0, MEM_RELEASE);
@@ -120,6 +160,18 @@ inline void* VirtualAlloc(size_t Size, bool Execute = false, bool Commit = true)
 inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Commit = true) {
   return FEXCore::Allocator::mmap(Base, Size, PROT_READ | PROT_WRITE | (Execute ? PROT_EXEC : 0), MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
+
+inline void* VirtualAllocJIT(size_t Size) {
+  return VirtualAlloc(Size, true);
+}
+
+// JIT code memory is always writable on Linux.
+class ScopedJITWrite final {
+public:
+  ScopedJITWrite() = default;
+  ScopedJITWrite(const ScopedJITWrite&) = delete;
+  ScopedJITWrite& operator=(const ScopedJITWrite&) = delete;
+};
 
 inline void VirtualFree(void* Ptr, size_t Size) {
   FEXCore::Allocator::munmap(Ptr, Size);

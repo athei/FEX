@@ -13,6 +13,8 @@ enum class FEXUnixLibFunctions : uint32_t {
   MapFile,
   GetPID,
   CheckSupportsTPIDRRO_CPU,
+  JITWriteProtectSupported,
+  JITWriteProtect,
   MAX,
 };
 
@@ -52,15 +54,19 @@ struct FEXUnixLib_GetSHMStatsVMA {
   void* SHMBase;
   uint32_t MapSize;
   uint32_t MaxSize;
+  // The reservation must start at or above this address
+  uint64_t MinAddress;
 };
-static_assert(sizeof(FEXUnixLib_GetSHMStatsVMA) == 16);
+static_assert(sizeof(FEXUnixLib_GetSHMStatsVMA) == 24);
 
 struct FEXUnixLib_MapFile {
   int32_t FD;
   uint64_t MapSize;
+  // The mapping must start at or above this address
+  uint64_t MinAddress;
   void* Result;
 };
-static_assert(sizeof(FEXUnixLib_MapFile) == 24);
+static_assert(sizeof(FEXUnixLib_MapFile) == 32);
 
 struct FEXUnixLib_GetPID {
   uint32_t Result;
@@ -71,3 +77,8 @@ struct FEXUnixLib_CheckSupportsTPIDRRO_CPU {
   uint32_t Result;
 };
 static_assert(sizeof(FEXUnixLib_CheckSupportsTPIDRRO_CPU) == 4);
+
+struct FEXUnixLib_JITWriteProtect {
+  bool Protect;
+};
+static_assert(sizeof(FEXUnixLib_JITWriteProtect) == 1);

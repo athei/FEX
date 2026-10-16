@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "Interface/Context/Context.h"
+#include <FEXCore/Utils/AllocatorHooks.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/SHMStats.h>
 #include <FEXCore/Utils/WritePriorityMutex.h>
@@ -127,6 +128,8 @@ struct GuestToHostMap {
 
   void InvalidateRange(uint64_t Start, uint64_t Length) {
     auto lk = AcquireWriteLock();
+    // Erase delinks blocks by patching code. The block delinkers rely on this write window.
+    FEXCore::Allocator::ScopedJITWrite JITWrite;
 
     auto lower = CodePages.lower_bound(Start >> 12);
     auto upper = CodePages.upper_bound((Start + Length - 1) >> 12);
@@ -453,11 +456,14 @@ private:
   // Maps from a page index to all blocks in the page that have at some point been fetched into L1/L2
   fextl::map<uint64_t, fextl::robin_set<uint64_t>> CachedCodePages;
 
-  uintptr_t PagePointer;
-  uintptr_t PageMemory;
+  // The L2 cache (PagePointer and PageMemory) followed by the L1 cache, without L2 when it is disabled.
+  uintptr_t CacheBase;
+  uintptr_t PagePointer {};
+  uintptr_t PageMemory {};
   uintptr_t L1Pointer;
   uintptr_t L1PointerMask;
 
+  size_t L2CacheSize;
   size_t TotalCacheSize;
 
   // Start with 8k entries in L1 to give 128KB of L1 cache to each thread.

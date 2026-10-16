@@ -34,6 +34,9 @@ StatAlloc::StatAlloc(FEXCore::SHMStats::AppType AppType) {
     SaveHeader(AppType);
     return;
   }
+
+  // Profiling stays off. Mark the slots as used up so that AllocateSlot doesn't retry the setup for every new thread.
+  CurrentSize = MAX_STATS_SIZE;
 }
 
 StatAlloc::~StatAlloc() {

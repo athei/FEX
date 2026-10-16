@@ -586,6 +586,9 @@ void BTCpuProcessInit() {
   if (FEX::Windows::UnixLib::Available()) {
     FEXCore::DiskCache::SetFileMapper(FEX::Windows::UnixLib::MapFile);
   }
+  if (FEX::Windows::UnixLib::JITWriteProtectSupported()) {
+    FEX::Windows::Allocator::EnableJITWriteProtect();
+  }
 
   {
     auto HostFeatures =

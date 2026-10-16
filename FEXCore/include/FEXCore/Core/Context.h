@@ -125,6 +125,10 @@ public:
   FEX_DEFAULT_VISIBILITY virtual void LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {}
   FEX_DEFAULT_VISIBILITY virtual void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) {}
 #endif
+  // Stops FEX's own background threads where they hold no locks that guest threads need, before the process ends and
+  // kills them wherever they are. ResumeBackgroundThreads undoes it if the process does not end.
+  FEX_DEFAULT_VISIBILITY virtual void PauseBackgroundThreads() {}
+  FEX_DEFAULT_VISIBILITY virtual void ResumeBackgroundThreads() {}
   FEX_DEFAULT_VISIBILITY virtual void SetSignalDelegator(FEXCore::SignalDelegator* SignalDelegation) = 0;
   FEX_DEFAULT_VISIBILITY virtual void SetSyscallHandler(FEXCore::HLE::SyscallHandler* Handler) = 0;
   FEX_DEFAULT_VISIBILITY virtual void SetThunkHandler(FEXCore::ThunkHandler* Handler) = 0;

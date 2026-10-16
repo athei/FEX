@@ -3,10 +3,12 @@
 
 #include <FEXCore/Utils/IntervalList.h>
 #include <FEXCore/HLE/SyscallHandler.h>
+#include <FEXCore/fextl/vector.h>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <string_view>
+#include <utility>
 
 namespace FEXCore::Core {
 struct InternalThreadState;
@@ -35,9 +37,11 @@ public:
   void ReprotectRWXIntervals(uint64_t Address, uint64_t Size);
   bool HandleRWXAccessViolation(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, uint64_t FaultAddress);
 
-  // Unprotects any RWX intervals in the input interval and invalidates code
-  // NOTE: CodeInvalidationMutex must be locked when calling this, and if true is returned, kept locked until the write ends.
-  bool BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size);
+  // Invalidates code in the input interval and unprotects any RWX intervals in it, which code compiled from it then
+  // leaves writable until EndUntrackedWrite. If false is returned there was nothing to unprotect and no write to end.
+  bool BeginUntrackedWrite(uint64_t Address, uint64_t Size);
+  // Invalidates code compiled from the interval during the write, which left its pages writable.
+  void EndUntrackedWrite(uint64_t Address, uint64_t Size);
 
   FEXCore::HLE::ExecutableRangeInfo QueryExecutableRange(uint64_t Address);
 
@@ -66,6 +70,8 @@ private:
   bool SMCDetectionDisabled {false};                    // Protected by IntervalsLock
   bool DEPDisabled {false};                             // Protected by IntervalsLock
   FEXCore::IntervalList<uint64_t> DEPPromotedIntervals; // Protected by IntervalsLock
+  // Page aligned [begin, end) of each untracked write in progress, protected by IntervalsLock
+  fextl::vector<std::pair<uint64_t, uint64_t>> UntrackedWrites;
 
   bool MonoBackpatcherDetectionPending {false};
   uint64_t MonoBase {0};

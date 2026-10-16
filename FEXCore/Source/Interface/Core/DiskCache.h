@@ -16,6 +16,7 @@
 #include <FEXCore/fextl/map.h>
 #include <FEXCore/fextl/vector.h>
 #include <stdint.h>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -209,6 +210,11 @@ namespace DiskCache {
       return Validation;
     }
 
+    // Before the process ends and kills the writer wherever it is: waits for the store in progress and stops using the
+    // cache, so that no thread needs a lock the writer may hold. Resume undoes it.
+    void Pause();
+    void Resume();
+
   private:
     bool OpenCacheDB(const fextl::string& CacheDBName, bool ReadOnly);
     uint64_t MakeLookupKey(Core::InternalThreadState* Thread, const uint64_t ModuleOffset, bool Writable, bool MonoBackpatcher);
@@ -216,6 +222,7 @@ namespace DiskCache {
 
     bool ReadingDiskCache {};
     bool WritingDiskCache {};
+    std::atomic<bool> Paused {};
     FEXCore::Context::ContextImpl* CTX;
     XXH128_hash_t BucketHash;
     fextl::vector<fextl::unique_ptr<IndexedDB>> ROCacheDBs;

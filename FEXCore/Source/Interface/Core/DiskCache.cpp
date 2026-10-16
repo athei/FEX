@@ -484,6 +484,20 @@ namespace DiskCache {
     }
   }
 
+  void DiskCache::Pause() {
+    Paused.store(true, std::memory_order_release);
+    if (Writer) {
+      Writer->Pause();
+    }
+  }
+
+  void DiskCache::Resume() {
+    if (Writer) {
+      Writer->Resume();
+    }
+    Paused.store(false, std::memory_order_release);
+  }
+
   uint64_t DiskCache::MakeLookupKey(Core::InternalThreadState* Thread, const uint64_t CodeKey, bool Writable, bool MonoBackpatcher) {
     struct __attribute__((packed)) {
       uint64_t CodeKey;
@@ -552,7 +566,7 @@ namespace DiskCache {
 
   std::optional<CodeHitData> DiskCache::Lookup(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region,
                                                uint64_t GuestRIP, std::optional<uint64_t>& GuestCodeKey) {
-    if (!IsReadingDiskCache()) {
+    if (!IsReadingDiskCache() || Paused.load(std::memory_order_acquire)) {
       return std::nullopt;
     }
     if (Region && Region->FileStartVA) {
@@ -981,7 +995,7 @@ namespace DiskCache {
   bool DiskCache::Store(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region, uint64_t GuestRIP,
                         uint64_t GuestCodeKey, std::span<const uint8_t> GuestCode, const CPU::CPUBackend::CompiledCode& CompiledCode,
                         std::span<const FEXCore::CPU::Relocation> Relocations, const Frontend::Decoder::DecodedBlockInformation* DecodedBlockInfo) {
-    if (!IsWritingDiskCache()) {
+    if (!IsWritingDiskCache() || Paused.load(std::memory_order_acquire)) {
       return false;
     }
     if (!DecodedBlockInfo) {

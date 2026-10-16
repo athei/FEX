@@ -93,6 +93,16 @@ void OpDispatchBuilder::FLDF64_Const(OpcodeArgs, uint64_t Num) {
 void OpDispatchBuilder::FILDF64(OpcodeArgs) {
   const auto ReadWidth = OpSizeFromSrc(Op);
 
+  if (ReadWidth == OpSize::i64Bit) {
+    // A 64-bit float can't hold every 64-bit integer, but a real x87 register
+    // can. Keep the integer next to its conversion so that FISTP m64 stores it
+    // unchanged, which code like Delphi's System.Move relies on to copy memory.
+    Ref Data = LoadSourceFPR_WithOpSize(Op, Op->Src[0], ReadWidth, Op->Flags);
+    Ref ConvertedData = _Vector_SToF(OpSize::i64Bit, OpSize::i64Bit, Data);
+    _PushStackInt64(ConvertedData, Data);
+    return;
+  }
+
   // Read from memory
   Ref Data = LoadSourceGPR_WithOpSize(Op, Op->Src[0], ReadWidth, Op->Flags);
   if (ReadWidth == OpSize::i16Bit) {
@@ -105,17 +115,14 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
   const auto Size = OpSizeFromSrc(Op);
 
-  Ref data = _ReadStackValue(0);
   bool CanUseFloatReg = Size == OpSize::i64Bit;
   if (CanUseFloatReg) {
     // If possible, it's faster to keep the data in an FPR than doing a GPR transfer.
-    if (Truncate) {
-      data = _Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit, data);
-    } else {
-      data = _Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, data);
-    }
+    // The x87 stack pass converts the value, or returns the integer FILD m64 loaded.
+    Ref data = _ReadStackValueInt64(Truncate);
     StoreResultFPR_WithOpSize(Op, Op->Dest, data, OpSize::i64Bit, OpSize::i8Bit);
   } else {
+    Ref data = _ReadStackValue(0);
     if (Truncate) {
       data = _Float_ToGPR_ZS(Size == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, OpSize::i64Bit, data);
     } else {

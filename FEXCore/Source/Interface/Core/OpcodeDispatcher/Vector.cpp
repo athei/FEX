@@ -3274,6 +3274,8 @@ void OpDispatchBuilder::RestoreX87State(Ref MemBase) {
     if (ReducedPrecisionMode) {
       // Convert to double precision
       Reg = _F80CVT(OpSize::i64Bit, Reg);
+      // Clear the integer the x87 stack pass may have kept next to the value.
+      _StoreContextFPRIndexed(LoadZeroVector(OpSize::i64Bit), Top, OpSize::i64Bit, MMBaseOffset() + 8, IR::OpSizeToSize(OpSize::i128Bit));
     }
     _StoreContextFPRIndexed(Reg, Top, StoreSize, MMBaseOffset(), IR::OpSizeToSize(OpSize::i128Bit));
     Top = _And(OpSize::i32Bit, Add(OpSize::i32Bit, Top, 1), SevenConst);

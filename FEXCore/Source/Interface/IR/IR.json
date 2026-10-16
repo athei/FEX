@@ -2993,6 +2993,14 @@
         "HasSideEffects": true,
         "X87": true
       },
+      "PushStackInt64 FPR:$X80Src, FPR:$IntValue": {
+        "Desc": [
+          "Reduced precision only: pushes X80Src, the 64-bit float converted from the 64-bit integer IntValue, on to the x87 stack.",
+          "Tracks IntValue so that ReadStackValueInt64 can return the integer unchanged while the value is not modified, also in later blocks."
+        ],
+        "HasSideEffects": true,
+        "X87": true
+      },
       "CopyPushStack u8:$StackLocation": {
         "Desc": [
           "Pushes an element already on the stack onto the top."
@@ -3031,6 +3039,15 @@
           "Reads a value off the stack at the offset"
         ],
         "DestSize": "OpSize::i128Bit",
+        "X87": true
+      },
+      "FPR = ReadStackValueInt64 i1:$Truncate": {
+        "Desc": [
+          "Reduced precision only: converts the top of the stack to a 64-bit signed integer in the low 64 bits of an FPR.",
+          "Rounds with the host rounding mode, or towards zero if Truncate is set.",
+          "If the value was pushed by PushStackInt64 and not modified since, returns that integer unchanged."
+        ],
+        "DestSize": "OpSize::i64Bit",
         "X87": true
       },
       "GPR = StackValidTag u8:$StackLocation": {

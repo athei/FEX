@@ -1264,7 +1264,10 @@ public:
           StoreContextHelper(Size, Class, Value, Offset);
           // If Partial and MMX register, then we need to store all 1s in bits 64-80
           if (Partial && Index >= MM0Index && Index <= MM7Index) {
-            _StoreContextGPR(OpSize::i16Bit, Constant(0xFFFF), Offset + 8);
+            // In reduced precision, the x87 stack pass keeps an integer in
+            // bits 64-127. Clear the rest of them, so that they read as
+            // 65535, which only matches a float that converts to it anyway.
+            _StoreContextGPR(ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i16Bit, Constant(0xFFFF), Offset + 8);
           }
         }
       }

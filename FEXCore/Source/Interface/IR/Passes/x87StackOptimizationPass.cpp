@@ -270,7 +270,10 @@ private:
   void SetX87ValidTag(uint8_t Offset, bool Valid);
   // Generates slow code to load/store a value from an offset from the top of the stack
   Ref LoadStackValueAtOffset_Slow(uint8_t Offset = 0);
-  void StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset = 0, bool SetValid = true);
+  // IntValue is the integer from PushStackInt64 that Value was converted from, if any.
+  void StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset = 0, bool SetValid = true, Ref IntValue = nullptr);
+  // Reads the top of the stack as a 64-bit integer on the slow path.
+  Ref LoadStackValueInt64_Slow(bool Truncate);
   // Update Top value in slow path for a pop
   void UpdateTopForPop_Slow(bool InvalidateTag = true);
   void UpdateTopForPush_Slow();
@@ -293,14 +296,16 @@ private:
     constexpr StackMemberInfo() = default;
     constexpr StackMemberInfo(Ref Data)
       : StackDataNode(Data) {}
-    constexpr StackMemberInfo(Ref Data, Ref Source, OpSize Size)
+    constexpr StackMemberInfo(Ref Data, Ref Source, OpSize Size, bool Integer = false)
       : StackDataNode(Data)
-      , Source({Size, Source}) {}
+      , Source({Size, Source, Integer}) {}
     Ref StackDataNode {}; // Reference to the data in the Stack.
                           // This is the source data node in the stack format, possibly converted to 64/80 bits.
     struct StackMemberData final {
       OpSize Size;
       Ref Node;
+      // Node is a signed integer, from PushStackInt64, rather than a float.
+      bool Integer;
     };
 
     static const StackMemberInfo Invalid;
@@ -346,6 +351,19 @@ private:
   std::array<Ref, 8> TopOffsetCache {};
   std::array<Ref, 8> TopOffsetAddressCache {};
   std::array<Ref, 8> TopValueCache {};
+  // For a pending value in TopValueCache, the integer it was converted from by
+  // PushStackInt64, or null.
+  //
+  // In reduced precision, FlushCachedRegs writes that integer to the upper
+  // half of the value's 16-byte register slot, which x87 code doesn't use
+  // otherwise in that mode, or zero if there is none. A later block's FISTP
+  // m64 then stores the integer instead of converting the float back if the
+  // float is still the conversion of the integer. A zero passes that check
+  // only for 0.0 and -0.0, which convert to 0 anyway, so writing zero for
+  // every other value keeps a stale integer from coming back. FRSTOR and
+  // FXRSTOR write zero as well, and MMX writes 0xFFFF, which passes only for
+  // 65535.0.
+  std::array<Ref, 8> TopIntCache {};
   std::array<StackSlot, 8> TopValidCache {};
 
   // Are we on the slow path?
@@ -373,6 +391,7 @@ inline void X87StackOptimization::InvalidateCachedRegs() {
   TopOffsetCache.fill(nullptr);
   TopOffsetAddressCache.fill(nullptr);
   TopValueCache.fill(nullptr);
+  TopIntCache.fill(nullptr);
   TopValidCache.fill(StackSlot::UNUSED);
 }
 
@@ -477,14 +496,38 @@ inline Ref X87StackOptimization::LoadStackValueAtOffset_Slow(uint8_t Offset) {
   return TopValueCache[Offset];
 }
 
-inline void X87StackOptimization::StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset, bool SetValid) {
+inline void X87StackOptimization::StoreStackValueAtOffset_Slow(Ref Value, uint8_t Offset, bool SetValid, Ref IntValue) {
   TopValueCache[Offset] = Value;
+  TopIntCache[Offset] = IntValue;
   FlushValuesPending[Offset] = true;
   // mark it valid
   // In some cases we might already know it has been previously set as valid so we don't need to do it again
   if (SetValid) {
     SetX87ValidTag(Offset, true);
   }
+}
+
+Ref X87StackOptimization::LoadStackValueInt64_Slow(bool Truncate) {
+  const auto Convert = [&](Ref Value) -> Ref {
+    if (Truncate) {
+      return IREmit->_Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit, Value);
+    }
+    return IREmit->_Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, Value);
+  };
+
+  Ref Value = LoadStackValueAtOffset_Slow();
+  if (FlushValuesPending[0]) {
+    // Written in this block: the slot in memory is stale.
+    return TopIntCache[0] ? TopIntCache[0] : Convert(Value);
+  }
+
+  // The value is the one in memory, so the integer next to it describes it if
+  // the value is still that integer's conversion. If it is, the integer is
+  // what a real x87 register holds.
+  Ref Int = IREmit->_LoadMemFPR(OpSize::i64Bit, GetOffsetTopAddressWithCache_Slow(0), IREmit->_InlineConstant(MMBaseOffset() + 8),
+                                OpSize::i64Bit, MemOffsetType::SXTX, 1);
+  Ref Same = IREmit->_VFCMPEQ(OpSize::i64Bit, OpSize::i64Bit, Value, IREmit->_Vector_SToF(OpSize::i64Bit, OpSize::i64Bit, Int));
+  return IREmit->_VBSL(OpSize::i64Bit, Same, Int, Convert(Value));
 }
 
 inline Ref X87StackOptimization::RotateRight8(uint32_t V, Ref Amount) {
@@ -588,6 +631,7 @@ inline void X87StackOptimization::UpdateTopForPop_Slow(bool InvalidateTag) {
   PopContainer(TopOffsetCache);
   PopContainer(TopOffsetAddressCache);
   PopContainer(TopValueCache);
+  PopContainer(TopIntCache);
   PopContainer(FlushValuesPending);
   PopContainer(TopValidCache);
   FlushTopPending = true;
@@ -604,6 +648,7 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
   PushContainer(TopOffsetCache);
   PushContainer(TopOffsetAddressCache);
   PushContainer(TopValueCache);
+  PushContainer(TopIntCache);
   PushContainer(FlushValuesPending);
   PushContainer(TopValidCache);
   FlushTopPending = true;
@@ -620,6 +665,15 @@ void X87StackOptimization::FlushCachedRegs() {
     if (FlushValuesPending[i]) {
       OrderedNode* TopOffsetAddress = GetOffsetTopAddressWithCache_Slow(i);
       IREmit->_StoreMemFPR(Size, TopValueCache[i], TopOffsetAddress, IREmit->_InlineConstant(MMBaseOffset()), Size, MemOffsetType::SXTX, 1);
+      if (ReducedPrecisionMode) {
+        // The integer behind the value, or zero, see TopIntCache.
+        auto IntOffset = IREmit->_InlineConstant(MMBaseOffset() + 8);
+        if (TopIntCache[i]) {
+          IREmit->_StoreMemFPR(OpSize::i64Bit, TopIntCache[i], TopOffsetAddress, IntOffset, OpSize::i64Bit, MemOffsetType::SXTX, 1);
+        } else {
+          IREmit->_StoreMemGPR(OpSize::i64Bit, GetConstant(0), TopOffsetAddress, IntOffset, OpSize::i64Bit, MemOffsetType::SXTX, 1);
+        }
+      }
       // store
       FlushValuesPending[i] = false;
     }
@@ -704,7 +758,8 @@ Ref X87StackOptimization::SynchronizeStackValues() {
     const auto& [Valid, StackMember] = StackData.top(i);
 
     if (Valid == StackSlot::VALID) {
-      StoreStackValueAtOffset_Slow(StackMember.StackDataNode, i, false);
+      Ref IntValue = StackMember.Source && StackMember.Source->Integer ? StackMember.Source->Node : nullptr;
+      StoreStackValueAtOffset_Slow(StackMember.StackDataNode, i, false, IntValue);
     }
   }
   { // Set valid tags
@@ -955,6 +1010,23 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         break;
       }
 
+      case OP_PUSHSTACKINT64: {
+        // Like PushStack, but the original value is an integer that only
+        // ReadStackValueInt64 may use, as its bits aren't the float's.
+        LOGMAN_THROW_A_FMT(ReducedPrecisionMode, "Reduced precision mode expected.");
+        const auto* Op = IROp->C<IROp_PushStackInt64>();
+        auto* SourceNode = CurrentIR.GetNode(Op->X80Src);
+        auto* IntNode = CurrentIR.GetNode(Op->IntValue);
+
+        if (SlowPath) {
+          UpdateTopForPush_Slow();
+          StoreStackValueAtOffset_Slow(SourceNode, 0, true, IntNode);
+        } else {
+          StackData.push(StackMemberInfo {SourceNode, IntNode, OpSize::i64Bit, true});
+        }
+        break;
+      }
+
       case OP_COPYPUSHSTACK: {
         const auto* Op = IROp->C<IROp_CopyPushStack>();
         auto Offset = Op->StackLocation;
@@ -976,6 +1048,33 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         Ref NewValue = LoadStackValue(Offset);
 
         IREmit->ReplaceUsesWithAfter(CodeNode, NewValue, CodeNode);
+        break;
+      }
+
+      case OP_READSTACKVALUEINT64: {
+        // FISTP m64. A 64-bit float rounds integers of 2^53 and above, so if
+        // the value is still the integer FILD m64 loaded, store that integer
+        // instead of converting the float back. A real x87 register holds any
+        // 64-bit integer, so the result is the one hardware gives. Arithmetic
+        // and other changes to the slot drop the integer. Values from earlier
+        // blocks are checked against the integer kept next to them in the
+        // register slot, see TopIntCache.
+        LOGMAN_THROW_A_FMT(ReducedPrecisionMode, "Reduced precision mode expected.");
+        const auto* Op = IROp->C<IROp_ReadStackValueInt64>();
+        const auto& Value = MigrateToSlowPath_IfInvalid();
+
+        Ref Result {};
+        if (SlowPath) {
+          Result = LoadStackValueInt64_Slow(Op->Truncate);
+        } else if (Value->Source && Value->Source->Integer) {
+          Result = Value->Source->Node;
+        } else if (Op->Truncate) {
+          Result = IREmit->_Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit, Value->StackDataNode);
+        } else {
+          Result = IREmit->_Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, Value->StackDataNode);
+        }
+
+        IREmit->ReplaceUsesWithAfter(CodeNode, Result, CodeNode);
         break;
       }
 
@@ -1018,7 +1117,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         OpSize StoreSize = Op->StoreSize;
         LOGMAN_THROW_A_FMT(Op->StoreSize == OpSize::i32Bit || Op->StoreSize == OpSize::i64Bit || Op->StoreSize == OpSize::f80Bit,
                            "Invalid store size in x87 store stack mem");
-        if (!SlowPath && Value->Source && Value->Source->Size == StoreSize) {
+        // An integer from FILD m64 has the size of a 64-bit float but not its
+        // bits, so it has to be converted.
+        if (!SlowPath && Value->Source && !Value->Source->Integer && Value->Source->Size == StoreSize) {
           Ref SourceValue = Value->Source->Node;
           if (Op->StoreSize == OpSize::f80Bit) {
             Store80BitToMem(Op, SourceValue, AddrNode, Offset, Align, OffsetType, OffsetScale);

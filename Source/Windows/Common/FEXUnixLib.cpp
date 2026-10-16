@@ -8,6 +8,7 @@
 #define __WINESRC__
 #include <winternl.h>
 #include <libloaderapi.h>
+#include "Allocator.h"
 #include "FEXUnixLib.h"
 #include "Priv.h"
 
@@ -120,6 +121,18 @@ bool SetKernelUnalignedAtomicControl(uint64_t Flags) {
   return Call(FEXUnixLibFunctions::SetKernelUnalignedAtomicControl, &Args) == STATUS_SUCCESS;
 }
 
+bool JITWriteProtectSupported() {
+  return Available() && Call(FEXUnixLibFunctions::JITWriteProtectSupported, nullptr) == STATUS_SUCCESS;
+}
+
+void JITWriteProtect(bool Protect) {
+  FEXUnixLib_JITWriteProtect Args {
+    .Protect = Protect,
+  };
+
+  Call(FEXUnixLibFunctions::JITWriteProtect, &Args);
+}
+
 void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPControl Control) {
   if (!Available()) {
     return;
@@ -159,6 +172,7 @@ SHMSlotResult AllocateSHMSlots(void* SHMBase, uint32_t MapSize, uint32_t MaxSize
     .SHMBase = SHMBase,
     .MapSize = MapSize,
     .MaxSize = MaxSize,
+    .MinAddress = FEX::Windows::Allocator::LowestFEXAddress,
   };
 
   if (Call(FEXUnixLibFunctions::GetSHMStatsVMA, &Args) == STATUS_SUCCESS) {
@@ -184,6 +198,7 @@ void* MapFile(HANDLE FileHandle, uint64_t MapSize) {
     FEXUnixLib_MapFile Args {
       .FD = -1,
       .MapSize = MapSize,
+      .MinAddress = FEX::Windows::Allocator::LowestFEXAddress,
     };
 
     // this is a dup equivalent

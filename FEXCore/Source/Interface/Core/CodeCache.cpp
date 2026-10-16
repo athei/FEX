@@ -354,7 +354,12 @@ bool CodeCache::SaveData(Core::InternalThreadState& Thread, int fd, const Execut
   // Dump the host code (relocated for position-independent serialization)
   std::span CodeBufferData(reinterpret_cast<std::byte*>(CodeBuffer->GetBufferBase()),
                            reinterpret_cast<std::byte*>(CodeBuffer->GetBufferBase()) + CodeBuffer->AllocatedSpaceUsed());
-  if (!ApplyCodeRelocations(SerializedBaseAddress, CodeBufferData, Relocations, true)) {
+  bool Relocated;
+  {
+    Allocator::ScopedJITWrite JITWrite;
+    Relocated = ApplyCodeRelocations(SerializedBaseAddress, CodeBufferData, Relocations, true);
+  }
+  if (!Relocated) {
     LOGMAN_THROW_A_FMT(false, "Failed to apply code relocations");
     return false;
   }
@@ -437,7 +442,10 @@ void CodeCache::Validate(const ExecutableFileSectionInfo& Section, fextl::set<ui
   NewRelocations.erase(std::remove_if(NewRelocations.begin(), NewRelocations.end(), [](const CPU::Relocation& Reloc) {
     return Reloc.Header.Type != CPU::RelocationTypes::RELOC_NAMED_SYMBOL_LITERAL && Reloc.Header.Type != CPU::RelocationTypes::RELOC_NAMED_THUNK_MOVE;
   }));
-  (void)ApplyCodeRelocations(Section.FileStartVA, CodeBufferRangeRef, NewRelocations, false);
+  {
+    Allocator::ScopedJITWrite JITWrite;
+    (void)ApplyCodeRelocations(Section.FileStartVA, CodeBufferRangeRef, NewRelocations, false);
+  }
 
   if (NewCodeBuffer->AllocatedSpaceUsed() <= CodeBufferRangeRef.size()) {
     // Reference compilation produced fewer bytes than our cache, so validation is going to fail.

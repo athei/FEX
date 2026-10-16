@@ -38,6 +38,20 @@ bool TryEnableHardwareTSO();
 bool SetKernelUnalignedAtomicControl(uint64_t Flags);
 
 void VirtualTHPControl(const void* Ptr, size_t Size, FEXCore::Allocator::THPControl Control);
+
+/**
+ * @brief Whether Wine backs JIT code buffers with per-thread W^X memory (macOS MAP_JIT).
+ * Only the modules enable it, through Allocator::EnableJITWriteProtect, so that tools linking this
+ * file don't pull in the JIT allocator.
+ */
+bool JITWriteProtectSupported();
+
+/**
+ * @brief Switches the calling thread's access to JIT code memory between writable and executable.
+ * Installed as FEXCore's JIT write-protect hook when the host maps JIT code with per-thread W^X
+ * (macOS MAP_JIT).
+ */
+void JITWriteProtect(bool Protect);
 void VirtualName(const char* Name, const void* Ptr, size_t Size);
 
 struct SHMSlotResult {

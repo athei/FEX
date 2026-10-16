@@ -145,7 +145,7 @@ DIRECT_SYSCALL_WRAPPER("#NtRaiseExceptionNative", WineNtRaiseExceptionSyscallId)
   // Both of these are wrapped as FEX needs them to setup its call checker at startup time and their NTDLL thunks could
   // already be patched by then (and because the call checker isn't installed, their patched x86 versions would be invoked
   // when called by FEX).
-DIRECT_SYSCALL_WRAPPER("#NtAllocateVirtualMemoryNative", WineNtAllocateVirtualMemorySyscallId)
+DIRECT_SYSCALL_WRAPPER("#NtAllocateVirtualMemoryExNative", WineNtAllocateVirtualMemoryExSyscallId)
 DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemorySyscallId)
 
   // A replacement for the standard ARM64EC call checker that ignores any FFS patches and always redirects to a function's

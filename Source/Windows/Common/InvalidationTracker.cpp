@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 #include <FEXCore/Utils/LogManager.h>
+#include <FEXCore/Utils/MathUtils.h>
 #include <FEXCore/Utils/TypeDefines.h>
 #include <FEXCore/Utils/SignalScopeGuards.h>
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include "InvalidationTracker.h"
+#include <algorithm>
 #include <windef.h>
 #include <winternl.h>
 
@@ -136,18 +138,23 @@ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address
   auto* SectionsBegin = IMAGE_FIRST_SECTION(Nt);
   auto* SectionsEnd = SectionsBegin + Nt->FileHeader.NumberOfSections;
   uint64_t LastExecutableSectionEnd = 0;
+  // For an image with at least page-sized section alignment, Wine protects each section up to its size rounded
+  // to the section alignment, so code past VirtualSize in that last part runs too. SectionAlignment is at the
+  // same offset for PE32 and PE32+.
+  const uint64_t SectionAlignment = std::max<uint64_t>(Nt->OptionalHeader.SectionAlignment, FEXCore::Utils::FEX_PAGE_SIZE);
 
   for (auto* Section = SectionsBegin; Section != SectionsEnd; Section++) {
     if (Section->Characteristics & IMAGE_SCN_MEM_EXECUTE) {
       std::unique_lock Lock(IntervalsLock);
 
+      const uint64_t SectionSize = Section->Misc.VirtualSize ? Section->Misc.VirtualSize : Section->SizeOfRawData;
       uint64_t SectionBase = Address + Section->VirtualAddress;
-      uint64_t SectionEnd = SectionBase + Section->Misc.VirtualSize;
+      uint64_t SectionEnd = Address + FEXCore::AlignUp(Section->VirtualAddress + SectionSize, SectionAlignment);
       XIntervals.Insert({SectionBase, SectionEnd});
       LastExecutableSectionEnd = std::max(LastExecutableSectionEnd, SectionEnd);
       if (Section->Characteristics & IMAGE_SCN_MEM_WRITE) {
-        LogMan::Msg::DFmt("Add image SMC interval: {:X} - {:X}", SectionBase, SectionBase + Section->Misc.VirtualSize);
-        RWXIntervals.Insert({SectionBase, SectionBase + Section->Misc.VirtualSize});
+        LogMan::Msg::DFmt("Add image SMC interval: {:X} - {:X}", SectionBase, SectionEnd);
+        RWXIntervals.Insert({SectionBase, SectionEnd});
       }
     }
   }
@@ -244,8 +251,35 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
   return false;
 }
 
-bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
-  return ProtectRWXIntervalsInternal(Address, Size, true);
+bool InvalidationTracker::BeginUntrackedWrite(uint64_t Address, uint64_t Size) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+
+  // Held exclusively, so no code is compiled from the range, which would protect it again, before it is registered
+  std::scoped_lock CodeLock(CTX.GetCodeInvalidationMutex());
+  if (!ProtectRWXIntervalsInternal(AlignedBase, AlignedEnd - AlignedBase, true)) {
+    return false;
+  }
+
+  std::unique_lock Lock(IntervalsLock);
+  UntrackedWrites.emplace_back(AlignedBase, AlignedEnd);
+  return true;
+}
+
+void InvalidationTracker::EndUntrackedWrite(uint64_t Address, uint64_t Size) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+
+  std::scoped_lock CodeLock(CTX.GetCodeInvalidationMutex());
+  {
+    std::unique_lock Lock(IntervalsLock);
+    const auto It = std::ranges::find(UntrackedWrites, std::pair {AlignedBase, AlignedEnd});
+    if (It != UntrackedWrites.end()) {
+      UntrackedWrites.erase(It);
+    }
+  }
+  // Compiling it again protects the pages
+  InvalidateIntervalInternalLocked(AlignedBase, AlignedEnd - AlignedBase);
 }
 
 FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
@@ -360,10 +394,24 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
         }
         HitRWXInterval = true;
       }
-      void* TmpAddress = reinterpret_cast<void*>(Address);
-      SIZE_T TmpSize = static_cast<SIZE_T>(std::min(End, Address + Query.Size) - Address);
-      ULONG TmpProt;
-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, ForWriteLocked ? GetUntrapProt(Address) : GetTrapProt(Address), &TmpProt);
+      const auto Protect = [&](uint64_t ProtectBase, uint64_t ProtectEnd) {
+        void* TmpAddress = reinterpret_cast<void*>(ProtectBase);
+        SIZE_T TmpSize = static_cast<SIZE_T>(ProtectEnd - ProtectBase);
+        ULONG TmpProt;
+        NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize,
+                               ForWriteLocked ? GetUntrapProt(ProtectBase) : GetTrapProt(ProtectBase), &TmpProt);
+      };
+      const auto ChunkEnd = std::min(End, Address + Query.Size);
+      if (ForWriteLocked || UntrackedWrites.empty()) {
+        Protect(Address, ChunkEnd);
+      } else {
+        // Pages an untracked write is filling stay writable until it ends, see BeginUntrackedWrite
+        for (auto Page = Address & FEXCore::Utils::FEX_PAGE_MASK; Page < ChunkEnd; Page += FEXCore::Utils::FEX_PAGE_SIZE) {
+          if (std::ranges::none_of(UntrackedWrites, [Page](const auto& Write) { return Page >= Write.first && Page < Write.second; })) {
+            Protect(std::max(Page, Address), std::min(Page + FEXCore::Utils::FEX_PAGE_SIZE, ChunkEnd));
+          }
+        }
+      }
     } else if (!Query.Size) {
       // No more regions past `Address` in the interval list
       break;

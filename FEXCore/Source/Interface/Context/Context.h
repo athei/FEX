@@ -197,6 +197,12 @@ public:
   void LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) override;
   void UnlockAfterFork(FEXCore::Core::InternalThreadState* Thread, bool Child) override;
 #endif
+  void PauseBackgroundThreads() override {
+    DiskCache.Pause();
+  }
+  void ResumeBackgroundThreads() override {
+    DiskCache.Resume();
+  }
   void SetSignalDelegator(FEXCore::SignalDelegator* SignalDelegation) override;
   void SetSyscallHandler(FEXCore::HLE::SyscallHandler* Handler) override;
   void SetThunkHandler(FEXCore::ThunkHandler* Handler) override;

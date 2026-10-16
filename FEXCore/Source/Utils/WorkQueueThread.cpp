@@ -28,26 +28,47 @@ void WorkQueueThread::QueueWork(fextl::unique_ptr<WorkItem> Work) {
   CV.notify_one();
 }
 
+void WorkQueueThread::Pause() {
+  std::unique_lock lk {Mutex};
+  Paused = true;
+  IdleCV.wait(lk, [this] { return !Running; });
+}
+
+void WorkQueueThread::Resume() {
+  {
+    std::unique_lock lk {Mutex};
+    Paused = false;
+  }
+  CV.notify_one();
+}
+
 void WorkQueueThread::ThreadProc() {
   while (true) {
     fextl::unique_ptr<WorkItem> Work;
     {
       std::unique_lock lk {Mutex};
-      while (!(Stop || !Queue.empty())) {
+      while (!(Stop || (!Paused && !Queue.empty()))) {
         CV.wait(lk);
       }
-      if (Queue.empty()) {
-        // nothing to do? must be stopping
+      if (Paused || Queue.empty()) {
+        // nothing to do, or paused? must be stopping
         LOGMAN_THROW_A_FMT(Stop, "WorkQueueThread wakes up empty but no Stop?");
         return;
       }
 
       Work = std::move(Queue.front());
       Queue.pop_front();
+      Running = true;
     }
 
     Work->Run();
-    // Work is destroyed here
+    Work.reset();
+
+    {
+      std::unique_lock lk {Mutex};
+      Running = false;
+    }
+    IdleCV.notify_all();
   }
 }
 

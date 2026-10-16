@@ -960,8 +960,7 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_15h(uint32_t Leaf) const {
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_1Ah(uint32_t Leaf) const {
   FEXCore::CPUID::FunctionResults Res {};
   if (Hybrid) {
-    uint32_t CPU = GetCPUID();
-    auto& Data = PerCPUData[CPU];
+    auto& Data = PerCPUData[GetCPUDataIndex()];
     // 0x40 is a big CPU
     // 0x20 is a little CPU
     Res.eax |= (Data.IsBig ? 0x40 : 0x20) << 24;
@@ -1146,15 +1145,15 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_8000_0001h(uint32_t Leaf) con
 
 // Processor brand string
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_8000_0002h(uint32_t Leaf) const {
-  return Function_8000_0002h(Leaf, GetCPUID());
+  return Function_8000_0002h(Leaf, GetCPUDataIndex());
 }
 
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_8000_0003h(uint32_t Leaf) const {
-  return Function_8000_0003h(Leaf, GetCPUID());
+  return Function_8000_0003h(Leaf, GetCPUDataIndex());
 }
 
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_8000_0004h(uint32_t Leaf) const {
-  return Function_8000_0004h(Leaf, GetCPUID());
+  return Function_8000_0004h(Leaf, GetCPUDataIndex());
 }
 
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_8000_0002h(uint32_t Leaf, uint32_t CPU) const {

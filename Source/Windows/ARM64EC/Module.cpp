@@ -7,6 +7,7 @@ $end_info$
 */
 
 #include <FEXCore/fextl/fmt.h>
+#include <FEXCore/fextl/vector.h>
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/Core/SignalDelegator.h>
 #include <FEXCore/Core/Context.h>
@@ -51,6 +52,8 @@ $end_info$
 #include "BTInterface.h"
 #include "Windows/Common/SHMStats.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <type_traits>
@@ -145,7 +148,11 @@ struct ThreadCPUArea {
 };
 
 struct FrontendThreadData {
-  bool InLockedRWXRead {};
+  // Set while the thread processes the cross-process work, see ProcessCrossProcessWork
+  bool InCrossProcessWork {};
+  bool InUntrackedRead {};
+  uint64_t UntrackedReadAddress {};
+  uint64_t UntrackedReadSize {};
 };
 
 namespace {
@@ -162,6 +169,12 @@ std::recursive_mutex ThreadCreationMutex;
 // Map of TIDs to their FEX thread state, `ThreadCreationMutex` must be locked when accessing
 std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*> Threads;
 
+// The thread terminating the process, see ProcessTerm. Claimed with acquire-release, and cleared with release once
+// TerminationSuspendedThreads is empty again.
+std::atomic<DWORD> TerminatingThread {};
+// Threads that ProcessTerm suspended, resumed again if the termination fails. Only the terminating thread uses it.
+fextl::vector<HANDLE> TerminationSuspendedThreads;
+
 std::pair<NTSTATUS, ThreadCPUArea> GetThreadCPUArea(HANDLE Thread) {
   THREAD_BASIC_INFORMATION Info;
   const NTSTATUS Err = NtQueryInformationThread(Thread, ThreadBasicInformation, &Info, sizeof(Info), nullptr);
@@ -172,8 +185,77 @@ ThreadCPUArea GetCPUArea() {
   return ThreadCPUArea(NtCurrentTeb());
 }
 
+// Wine defers a suspend of a thread in a syscall callback until it leaves the callback. Leaves that state, takes a
+// suspend that was deferred already the way Wine's leave_syscall_callback does, and returns the state to restore.
+auto LeaveSyscallCallback() {
+  auto* Area = GetCPUArea().Area;
+  const auto Prev = Area->InSyscallCallback;
+  Area->InSyscallCallback = 0;
+  if (Area->SuspendDoorbell && *Area->SuspendDoorbell) {
+    CONTEXT Context;
+    RtlCaptureContext(&Context);
+    if (*Area->SuspendDoorbell) {
+      NtContinue(&Context, FALSE);
+    }
+  }
+  return Prev;
+}
+
+// Waits until the thread is killed by the thread terminating the process, or until that termination fails. The thread
+// waits outside of the syscall callback state, so that the terminating thread can suspend it at once.
+void WaitForTermination() {
+  const auto Prev = LeaveSyscallCallback();
+  LARGE_INTEGER Timeout {.QuadPart = -100'000}; // 10ms
+  while (TerminatingThread.load(std::memory_order_acquire)) {
+    NtDelayExecution(FALSE, &Timeout);
+  }
+  GetCPUArea().Area->InSyscallCallback = Prev;
+}
+
 FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Thread) {
   return static_cast<FrontendThreadData*>(Thread->FrontendPtr);
+}
+
+// Wine queues the memory notifications and instruction cache flushes that other processes make for this one, and a
+// thread of this one processes them when FEX calls ProcessPendingCrossProcessEmulatorWork. The two notifications around
+// a syscall become two items there, which different threads can process, and the second one is lost when the queue is
+// full. Holding ThreadCreationMutex from the first to the second, as around a syscall of this process, could keep it
+// held for long or for good, and orders nothing, as the other process makes its syscall without waiting for this one.
+// So for queued items the first notification does nothing, and the second one takes the mutex only for its own work.
+// The work runs in the syscall callback state, as Wine runs the hooks for this process's own syscalls. There Wine's
+// wrappers don't call the hooks for the memory syscalls that FEX makes itself, such as rpmalloc committing memory while
+// InvalidationTracker holds its lock, which would otherwise wait for that lock again in the same thread. Every caller
+// runs with InSimulation set, so suspends stay as cooperative as they were.
+void ProcessCrossProcessWork() {
+  auto* Area = GetCPUArea().Area;
+  auto* Data = GetFrontendThreadData(GetCPUArea().ThreadState());
+  const bool PrevWork = Data->InCrossProcessWork;
+  const auto PrevCallback = Area->InSyscallCallback;
+  Data->InCrossProcessWork = true;
+  Area->InSyscallCallback = 1;
+  ProcessPendingCrossProcessEmulatorWork();
+  Area->InSyscallCallback = PrevCallback;
+  Data->InCrossProcessWork = PrevWork;
+}
+
+// Handles a notification of a pair around a syscall, with Work done in the second one (After), see ProcessCrossProcessWork
+template<typename Func>
+void NotifyAroundSyscall(BOOL After, Func&& Work) {
+  auto* Thread = GetCPUArea().ThreadState();
+  if (Thread->FrontendPtr && GetFrontendThreadData(Thread)->InCrossProcessWork) {
+    if (After) {
+      std::scoped_lock Lock(ThreadCreationMutex);
+      Work();
+    }
+    return;
+  }
+
+  if (!After) {
+    ThreadCreationMutex.lock();
+  } else {
+    Work();
+    ThreadCreationMutex.unlock();
+  }
 }
 
 bool IsEmulatorStackAddress(const ThreadCPUArea CPUArea, uint64_t Address) {
@@ -648,7 +730,7 @@ public:
   ECSyscallHandler() = default;
 
   void HandleSyscall(FEXCore::Core::CpuStateFrame* Frame) override {
-    ProcessPendingCrossProcessEmulatorWork();
+    ProcessCrossProcessWork();
 
     // Manually raise an exeption with the current JIT state packed into a native context, ntdll handles this and
     // reenters the JIT (see dlls/ntdll/signal_arm64ec.c in wine).
@@ -690,13 +772,13 @@ public:
   }
 
   void PreCompile() override {
-    ProcessPendingCrossProcessEmulatorWork();
+    ProcessCrossProcessWork();
   }
 };
 } // namespace Exception
 
 extern "C" void SyncThreadContext(CONTEXT* Context) {
-  ProcessPendingCrossProcessEmulatorWork();
+  ProcessCrossProcessWork();
   auto* Thread = GetCPUArea().ThreadState();
   // All other EFlags bits are lost when converting to/from an ARM64EC context, so merge them in from the current JIT state.
   // This is advisable over dropping their values as thread suspend/resume uses this function, and that can happen at any point in guest code.
@@ -792,7 +874,91 @@ NTSTATUS ProcessInit() {
   return STATUS_SUCCESS;
 }
 
-void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {}
+// Wine calls this around NtTerminateProcess(0), which kills every other thread wherever it is before the caller runs the
+// DLL detach routines. A thread killed while it holds a JIT lock, such as the lookup cache lock taken to compile or look
+// up a block, leaves it held for good, and the caller hangs once it needs that lock. So suspend the other threads first,
+// as ThreadTerm does for one thread, and pause FEX's own background threads. FEX takes its locks only in the JIT or in
+// syscall callbacks, where Wine suspends a thread cooperatively once it holds none, except for the pause below. A call
+// for another process, or for the current one by handle, which ends it without running more code in it, needs nothing.
+void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {
+  if (Handle) {
+    return;
+  }
+
+  if (After) {
+    for (auto Thread : TerminationSuspendedThreads) {
+      if (!NT_SUCCESS(Status)) {
+        NtResumeThread(Thread, nullptr);
+      }
+      NtClose(Thread);
+    }
+    TerminationSuspendedThreads.clear();
+    if (!NT_SUCCESS(Status)) {
+      CTX->ResumeBackgroundThreads();
+      TerminatingThread.store(0, std::memory_order_release);
+    }
+    return;
+  }
+
+  // Claimed before taking the mutex, so that a thread suspending this one in ThreadTerm from now on sees the claim,
+  // and so that any other thread terminating the process at the same time waits here to be killed.
+  const auto Self = GetCurrentThreadId();
+  for (DWORD Expected = 0;
+       !TerminatingThread.compare_exchange_strong(Expected, Self, std::memory_order_acq_rel, std::memory_order_acquire) && Expected != Self;
+       Expected = 0) {
+    WaitForTermination();
+  }
+
+  fextl::vector<HANDLE> Candidates;
+  {
+    std::scoped_lock Lock(ThreadCreationMutex);
+
+    constexpr ACCESS_MASK Access = THREAD_QUERY_INFORMATION | THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT;
+    HANDLE Thread {};
+    bool Keep {};
+    HANDLE Next;
+    while (!NtGetNextThread(NtCurrentProcess(), Thread, Access, 0, 0, &Next)) {
+      if (Thread && !Keep) {
+        NtClose(Thread);
+      }
+      Thread = Next;
+      Keep = false;
+
+      THREAD_BASIC_INFORMATION Info;
+      if (NtQueryInformationThread(Thread, ThreadBasicInformation, &Info, sizeof(Info), nullptr)) {
+        continue;
+      }
+      const auto ThreadTID = static_cast<DWORD>(reinterpret_cast<uintptr_t>(Info.ClientId.UniqueThread));
+      if (ThreadTID == Self || !Threads.contains(ThreadTID)) {
+        continue;
+      }
+      Candidates.push_back(Thread);
+      Keep = true;
+    }
+    if (Thread && !Keep) {
+      NtClose(Thread);
+    }
+  }
+
+  // The suspends are requested and waited for without the mutex, which a thread may need before it can suspend, and
+  // outside of the syscall callback state, after taking a suspend of this thread requested meanwhile: a thread in
+  // ThreadTerm that suspended this one waits for that suspend before it sees the claim, and without msync the wait goes
+  // to the server, which holds every wait of a thread it has marked suspended. See SuspendThreadsForTermination.
+  const auto Prev = LeaveSyscallCallback();
+  TerminationSuspendedThreads =
+    FEX::Windows::SuspendThreadsForTermination(Candidates, [](HANDLE Thread) { return NtSuspendThread(Thread, nullptr); });
+  for (auto Thread : Candidates) {
+    if (std::ranges::find(TerminationSuspendedThreads, Thread) == TerminationSuspendedThreads.end()) {
+      NtClose(Thread);
+    }
+  }
+
+  // With the guest threads stopped, a store the disk cache writer has in progress can finish. With a disk cache, this
+  // waits for the writer's mutex outside of the syscall callback state. Our arm64 builds don't enable the disk cache, so
+  // there is no writer and this takes no lock.
+  CTX->PauseBackgroundThreads();
+  GetCPUArea().Area->InSyscallCallback = Prev;
+}
 
 class ScopedCallbackDisable {
 private:
@@ -932,15 +1098,12 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
     return;
   }
 
-  if (!After) {
-    ThreadCreationMutex.lock();
-  } else {
+  NotifyAroundSyscall(After, [&] {
     // MEM_RESET(_UNDO) ignores the passed permissions
     if (!Status && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
       InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
     }
-    ThreadCreationMutex.unlock();
-  }
+  });
 }
 
 void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
@@ -948,14 +1111,11 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
     return;
   }
 
-  if (!After) {
-    ThreadCreationMutex.lock();
-  } else {
+  NotifyAroundSyscall(After, [&] {
     if (!Status) {
       InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
     }
-    ThreadCreationMutex.unlock();
-  }
+  });
 }
 
 void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, NTSTATUS Status) {
@@ -963,14 +1123,11 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
     return;
   }
 
-  if (!After) {
-    ThreadCreationMutex.lock();
-  } else {
+  NotifyAroundSyscall(After, [&] {
     if (!Status) {
       InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
     }
-    ThreadCreationMutex.unlock();
-  }
+  });
 }
 
 NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
@@ -1055,23 +1212,21 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
   // Additionally, async reads are still completely untracked with invalidation, which never worked before anyway.
 
   if (AppConfigName == "P5R.exe") {
-    // Use the locking mechanism for (Persona 5 Royal AppID 1687950) which does exactly the problem described above.
-    auto& InLockedRWXRead = GetFrontendThreadData(ThreadState)->InLockedRWXRead;
+    // Persona 5 Royal (AppID 1687950) does exactly the problem described above. Make the RWX pages in the buffer writable
+    // for the read and keep them so until it returns, without holding a lock across it.
+    // Code compiled from the buffer during the read can run with the read half done, as on hardware, and writes into
+    // the buffer's pages during the read are only noticed when it ends. ThreadTerm ends the write of a thread that is
+    // terminated during the read.
+    auto* FrontendData = GetFrontendThreadData(ThreadState);
+    std::scoped_lock Lock(ThreadCreationMutex);
     if (!After) {
-      ThreadCreationMutex.lock();
-      CTX->GetCodeInvalidationMutex().lock();
-      if (InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
-        InLockedRWXRead = true;
-      } else {
-        CTX->GetCodeInvalidationMutex().unlock();
-        ThreadCreationMutex.unlock();
-      }
-    } else {
-      if (InLockedRWXRead) {
-        InLockedRWXRead = false;
-        CTX->GetCodeInvalidationMutex().unlock();
-        ThreadCreationMutex.unlock();
-      }
+      FrontendData->UntrackedReadAddress = reinterpret_cast<uint64_t>(Address);
+      FrontendData->UntrackedReadSize = static_cast<uint64_t>(Size);
+      const bool Begun = InvalidationTracker->BeginUntrackedWrite(FrontendData->UntrackedReadAddress, FrontendData->UntrackedReadSize);
+      FrontendData->InUntrackedRead = Begun;
+    } else if (FrontendData->InUntrackedRead) {
+      FrontendData->InUntrackedRead = false;
+      InvalidationTracker->EndUntrackedWrite(FrontendData->UntrackedReadAddress, FrontendData->UntrackedReadSize);
     }
 
     return;
@@ -1084,7 +1239,28 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
 }
 
 NTSTATUS ThreadInit() {
-  std::scoped_lock Lock(ThreadCreationMutex);
+  // Wine calls this in a syscall callback, where it suspends a thread cooperatively, but only once the thread has a
+  // suspend doorbell, which is set up at the end. A thread suspended at once here could hold ThreadCreationMutex, which
+  // threads in the JIT or in other syscall callbacks may need before they can suspend. So until then the thread uses a
+  // doorbell on the stack, followed by a hardware TSO state that the hooks in Module.S leave alone, and the real doorbell
+  // takes over a suspend requested through it.
+  struct {
+    ULONG Doorbell;
+    uint32_t HardwareTSOState;
+  } InitDoorbell {0, FEXCore::ToUnderlying(FEX::Windows::HardwareTSO::State::NotUsed)};
+  GetCPUArea().Area->SuspendDoorbell = &InitDoorbell.Doorbell;
+
+  // A thread that starts while another thread terminates the process waits to be killed instead of entering the JIT
+  while (true) {
+    ThreadCreationMutex.lock();
+    const auto Terminating = TerminatingThread.load(std::memory_order_acquire);
+    if (!Terminating || Terminating == GetCurrentThreadId()) {
+      break;
+    }
+    ThreadCreationMutex.unlock();
+    WaitForTermination();
+  }
+  std::scoped_lock Lock(std::adopt_lock, ThreadCreationMutex);
   FEX::Windows::InitCRTThread();
   const auto CPUArea = GetCPUArea();
 
@@ -1152,7 +1328,12 @@ NTSTATUS ThreadInit() {
   FEX::Windows::HardwareTSO::InitThread(Thread->CurrentFrame);
 
   CPUArea.ThreadState() = Thread;
+  std::atomic_signal_fence(std::memory_order_seq_cst);
   CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(&Thread->CurrentFrame->SuspendDoorbell);
+  std::atomic_signal_fence(std::memory_order_seq_cst);
+  if (*static_cast<volatile ULONG*>(&InitDoorbell.Doorbell)) {
+    *CPUArea.Area->SuspendDoorbell = InitDoorbell.Doorbell;
+  }
   return STATUS_SUCCESS;
 }
 
@@ -1172,11 +1353,23 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
   bool Self = ThreadTID == GetCurrentThreadId();
   if (!Self) {
     CONTEXT TmpContext;
+    // Outside of the syscall callback state Wine runs this in, as the wait below goes to the server without msync, and
+    // the server holds every wait of a thread it has marked suspended, see ProcessTerm.
+    const auto Prev = LeaveSyscallCallback();
     // If we are suspending a thread that isn't ourselves, try to suspend it first so we know internal JIT locks aren't being held.
     NtSuspendThread(*ThreadDup, NULL);
     // This will wait for the thread to be suspended
     TmpContext.ContextFlags = CONTEXT_CONTROL;
     NtGetContextThread(*ThreadDup, &TmpContext);
+    GetCPUArea().Area->InSyscallCallback = Prev;
+
+    // The target may be terminating the process, which it claimed before taking any FEX lock. It kills this thread, so
+    // let it go on and wait for that, and try again if the termination fails.
+    if (TerminatingThread.load(std::memory_order_acquire) == ThreadTID) {
+      NtResumeThread(*ThreadDup, nullptr);
+      WaitForTermination();
+      return ThreadTerm(Thread, ExitCode);
+    }
   }
 
   const auto [Err, CPUArea] = GetThreadCPUArea(*ThreadDup);
@@ -1196,12 +1389,35 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
     if (StatAllocHandler) {
       StatAllocHandler->DeallocateSlot(CPUArea.ThreadState()->ThreadStats);
     }
+
+    // Terminated in the middle of an untracked read, see BTCpu64NotifyReadFile
+    const auto* FrontendData = GetFrontendThreadData(CPUArea.ThreadState());
+    if (FrontendData->InUntrackedRead) {
+      InvalidationTracker->EndUntrackedWrite(FrontendData->UntrackedReadAddress, FrontendData->UntrackedReadSize);
+    }
   }
   auto ThreadState = CPUArea.ThreadState();
 
   // The doorbell is part of the frame freed below. The hardware TSO hooks in Module.S read through this pointer on
-  // the syscalls that follow (NtTerminateThread), so they must not see a stale one.
-  CPUArea.Area->SuspendDoorbell = nullptr;
+  // the syscalls that follow (NtTerminateThread), so they must not see a stale one. Another thread is suspended here
+  // and is killed next. The current thread is in the syscall callback state, where Wine suspends it cooperatively only
+  // while it has a doorbell, and the teardown below takes FEX locks. So until the teardown is done, its doorbell, and
+  // the hardware TSO state that the hooks read after it, live in the CPU area slot of the JIT entry point, which no code
+  // uses any more, and that doorbell takes over a suspend requested through the old one.
+  if (Self) {
+    auto* const TermDoorbell = reinterpret_cast<uint32_t*>(&CPUArea.Area->EmulatorData[2]);
+    auto* const OldDoorbell = CPUArea.Area->SuspendDoorbell;
+    TermDoorbell[0] = 0;
+    TermDoorbell[1] = FEXCore::ToUnderlying(FEX::Windows::HardwareTSO::State::NotUsed);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    CPUArea.Area->SuspendDoorbell = reinterpret_cast<ULONG*>(TermDoorbell);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    if (OldDoorbell && *static_cast<volatile ULONG*>(OldDoorbell)) {
+      TermDoorbell[0] = *OldDoorbell;
+    }
+  } else {
+    CPUArea.Area->SuspendDoorbell = nullptr;
+  }
 
   delete GetFrontendThreadData(ThreadState);
 
@@ -1211,8 +1427,15 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
   FEX::Windows::CallRetStack::DestroyThread(ThreadState);
   CTX->DestroyThread(ThreadState);
   ::VirtualFree(reinterpret_cast<void*>(CPUArea.EmulatorStackLimit()), 0, MEM_RELEASE);
-  if (ThreadTID == GetCurrentThreadId()) {
+  if (Self) {
     FEX::Windows::DeinitCRTThread();
+
+    // Holding no FEX locks any more, take a suspend requested meanwhile and drop the doorbell. NtTerminateThread then
+    // waits for its end in the server, which never ends a wait of a thread it holds suspended, so the thread must be
+    // suspended at once from here on, as it was before.
+    const auto Prev = LeaveSyscallCallback();
+    CPUArea.Area->SuspendDoorbell = nullptr;
+    CPUArea.Area->InSyscallCallback = Prev;
   }
 
   return STATUS_SUCCESS;

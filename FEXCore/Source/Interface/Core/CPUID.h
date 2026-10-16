@@ -596,5 +596,12 @@ private:
 
   using GetCPUIDPtr = uint32_t (*)();
   GetCPUIDPtr GetCPUID;
+
+  // Index into PerCPUData for the current CPU. The host can report a CPU number beyond the
+  // cores known at startup, for example under Wine when processes in one session disagree on
+  // the processor count, so wrap it around.
+  uint32_t GetCPUDataIndex() const {
+    return GetCPUID() % PerCPUData.size();
+  }
 };
 } // namespace FEXCore

@@ -532,6 +532,9 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
   bool WantsDiskCachePatching = DiskCache.IsReadingDiskCache() || DiskCache.IsWritingDiskCache();
 
+  // Set again below for decoded code
+  Thread->OpDispatcher->SetWriteBackVectorCacheEachInst(false);
+
   if (HasCustomIRHandlers.load(std::memory_order_relaxed)) {
     std::shared_lock lk(CustomIRMutex);
     auto Handler = CustomIRHandlers.find(GuestRIP);
@@ -553,6 +556,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
     Thread->OpDispatcher->BeginFunction(GuestRIP, &CodeBlocks, BlockInfo->TotalInstructionCount, BlockInfo->Is64BitMode,
                                         AreMonoHacksActive() && MonoBackpatcherBlock.load(std::memory_order_relaxed) == GuestRIP);
+    Thread->OpDispatcher->SetWriteBackVectorCacheEachInst(BlockInfo->InWritableRange);
 
     const auto GPRSize = Thread->OpDispatcher->GetGPROpSize();
 

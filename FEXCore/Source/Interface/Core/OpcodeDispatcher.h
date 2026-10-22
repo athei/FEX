@@ -340,6 +340,12 @@ public:
     return ShouldDump;
   }
 
+  // Write the MMX and AVX high cache entries back at every instruction boundary too, for code that a store can modify
+  // while it runs, see FlushRegisterCache.
+  void SetWriteBackVectorCacheEachInst(bool WriteBack) {
+    WriteBackVectorCacheEachInst = WriteBack;
+  }
+
   void BeginFunction(uint64_t RIP, const fextl::vector<FEXCore::Frontend::Decoder::DecodedBlocks>* Blocks, uint32_t NumInstructions,
                      bool Is64BitMode, bool MonoBackpatcherBlock);
   void Finalize();
@@ -1224,10 +1230,16 @@ public:
 
       // A fault handler that resumes at the faulting instruction, as for
       // inline SMC, rebuilds the state from the SRA registers and the
-      // context, so DF has to be in the context at every instruction
-      // boundary too. It is only written back after an instruction changed
-      // it, and stays cached since reloading it is a memory load.
-      KeepCachedMask = 1ull << DFIndex;
+      // context, so DF, the MMX registers and the upper halves of the YMM
+      // registers have to be in the context at every instruction boundary
+      // too. Each is only written back after an instruction changed it, and
+      // stays cached since reloading it is a memory load.
+      const uint64_t DFMask = 1ull << DFIndex;
+      const uint64_t MMXMask = ((1ull << (MM7Index - MM0Index + 1)) - 1) << MM0Index;
+      static_assert(AVXHigh15Index == 63, "AVX high halves are the top cache indices");
+      const uint64_t AVXHighMask = ~0ULL << AVXHigh0Index;
+
+      KeepCachedMask = DFMask | (WriteBackVectorCacheEachInst ? (MMXMask | AVXHighMask) : 0);
       Bits &= (Mask | KeepCachedMask);
     }
 
@@ -1389,6 +1401,7 @@ private:
   ForceTSOMode ForceTSO {ForceTSOMode::NoOverride};
   // Used during new op bringup
   bool ShouldDump {false};
+  bool WriteBackVectorCacheEachInst {false};
 
   using SaveStoreAVXStatePtr = void (OpDispatchBuilder::*)(Ref MemBase);
   using DefaultAVXStatePtr = void (OpDispatchBuilder::*)();

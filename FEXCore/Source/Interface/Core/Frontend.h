@@ -55,6 +55,9 @@ public:
   struct DecodedBlockInformation final {
     uint64_t TotalInstructionCount;
     bool Is64BitMode {};
+    // Some of the decoded code lies in a writable executable range. A store into such a range can hit the running
+    // code, and inline SMC handling then applies to the whole compiled unit, not only to the block that holds the page.
+    bool InWritableRange {};
     fextl::vector<DecodedBlocks> Blocks;
     fextl::set<uint64_t> EntryPoints;
     fextl::set<uint64_t> CodePages; // Start addresses of all pages touching the block

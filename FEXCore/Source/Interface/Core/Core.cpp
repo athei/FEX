@@ -626,16 +626,16 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
         // Do a partial register cache flush before every instruction. This
         // prevents cross-instruction static register caching, while allowing
-        // context load/stores to be optimized within a block. Theoretically,
-        // this flush is not required for correctness, all mandatory flushes are
-        // included in instruction-specific handlers. Instead, this is a blunt
-        // heuristic to make the register cache less aggressive, as the current
-        // RA generates bad code in common cases with tied registers otherwise.
+        // context load/stores to be optimized within a block. For the SRA
+        // registers this is a blunt heuristic to make the register cache less
+        // aggressive, as the current RA generates bad code in common cases with
+        // tied registers otherwise.
         //
-        // However, it makes our exception handling behaviour more predictable.
-        // It is potentially correctness bearing in that sense, but that is a
-        // side effect here and (if that behaviour is required) we should handle
-        // that more explicitly later.
+        // It is required for correctness for DF, though. A fault in the middle
+        // of a block that resumes at the faulting instruction, such as inline
+        // SMC, rebuilds the state with ReconstructThreadState (or SpillSRA on
+        // Linux) from the SRA registers and the context, and DF is only in the
+        // context once this flush has written it back.
         Thread->OpDispatcher->FlushRegisterCache(true);
 
         if (ExtendedDebugInfo || Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo)) {

@@ -1207,16 +1207,28 @@ public:
     // instructions like "add rax, 1". This hack will go away with clauses.
     uint64_t Bits = RegCache.Written;
 
-    // We have an SRA only mode that exists as a hack to make register caching
-    // less aggressive. We should get rid of this once RA can take it.
+    // We have an SRA only mode, run before every instruction, that exists as a
+    // hack to make register caching less aggressive. We should get rid of
+    // that part once RA can take it. The DF write back it also does is needed
+    // for correctness and has to stay at every instruction boundary.
     uint64_t Mask = ~0ULL;
+
+    // Written back, but still valid in the cache afterwards.
+    uint64_t KeepCachedMask = 0;
 
     if (SRAOnly) {
       const uint64_t GPRMask = ((1ull << (AFIndex - GPR0Index + 1)) - 1) << GPR0Index;
       const uint64_t FPRMask = ((1ull << (FPR15Index - FPR0Index + 1)) - 1) << FPR0Index;
 
       Mask &= (GPRMask | FPRMask);
-      Bits &= Mask;
+
+      // A fault handler that resumes at the faulting instruction, as for
+      // inline SMC, rebuilds the state from the SRA registers and the
+      // context, so DF has to be in the context at every instruction
+      // boundary too. It is only written back after an instruction changed
+      // it, and stays cached since reloading it is a memory load.
+      KeepCachedMask = 1ull << DFIndex;
+      Bits &= (Mask | KeepCachedMask);
     }
 
     if (MMXOnly) {
@@ -1275,7 +1287,7 @@ public:
       Bits &= ~(1ull << Index);
     }
 
-    RegCache.Written &= ~Mask;
+    RegCache.Written &= ~(Mask | KeepCachedMask);
     RegCache.Cached &= ~Mask;
     RegCache.Partial &= ~Mask;
   }

@@ -60,12 +60,19 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
 
     if (EffectiveExec) {
       XIntervals.Insert(ProtInterval);
+      // A range made executable and read-only stays in RWXIntervals, so a write to it is still taken for SMC and made
+      // writable. While FEX traps writes to a range, VirtualProtect and VirtualQuery report PAGE_EXECUTE_READ for it, so
+      // a guest that saved that protection and restores it after patching still expects the range to be writable.
       if (EffectiveRWX) {
         LogMan::Msg::DFmt("Add SMC interval: {:X} - {:X}", AlignedBase, AlignedBase + AlignedSize);
         RWXIntervals.Insert(ProtInterval);
       }
-      if (DEPDisabled && !HasExec) {
-        DEPPromotedIntervals.Insert(ProtInterval);
+      if (DEPDisabled) {
+        if (HasExec) {
+          DEPPromotedIntervals.Remove(ProtInterval);
+        } else {
+          DEPPromotedIntervals.Insert(ProtInterval);
+        }
       }
       return true;
     } else if (XIntervals.Intersect(ProtInterval)) {

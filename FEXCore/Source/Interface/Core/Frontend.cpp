@@ -120,6 +120,9 @@ int32_t Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
       return -(Size - RemainingSize);
     }
 
+    // An instruction can start in one range and end in the next
+    BlockInfo.InWritableRange |= RangeInfo.Writable;
+
     uint64_t RangeRemainingSize = ExecutableRangeEnd - Address;
     if (RemainingSize > RangeRemainingSize) {
       RemainingSize -= RangeRemainingSize;
@@ -127,6 +130,7 @@ int32_t Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
     }
   }
 
+  BlockInfo.InWritableRange |= ExecutableRangeWritable;
   // Say all bytes are readable.
   return Size;
 }
@@ -1817,6 +1821,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
   CurrentCodePage = PC & FEXCore::Utils::FEX_PAGE_MASK;
 
   BlockInfo.CodePages = {CurrentCodePage};
+  BlockInfo.InWritableRange = false;
 
   EntryBlock = true;
   FinalInstruction = false;

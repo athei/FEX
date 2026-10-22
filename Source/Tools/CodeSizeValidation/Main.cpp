@@ -488,7 +488,8 @@ public:
   }
 
   FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
-    return {0, UINT64_MAX, true};
+    // Not writable, the code of most programs is compiled like that
+    return {0, UINT64_MAX, false};
   }
 };
 } // namespace

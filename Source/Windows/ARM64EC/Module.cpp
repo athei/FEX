@@ -1349,6 +1349,11 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
     return Err;
   }
 
+  // A thread of another process has no state in this one to tear down.
+  if (reinterpret_cast<uint64_t>(Info.ClientId.UniqueProcess) != GetCurrentProcessId()) {
+    return STATUS_SUCCESS;
+  }
+
   const auto ThreadTID = reinterpret_cast<uint64_t>(Info.ClientId.UniqueThread);
   bool Self = ThreadTID == GetCurrentThreadId();
   if (!Self) {

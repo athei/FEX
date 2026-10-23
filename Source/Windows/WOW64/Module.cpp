@@ -935,6 +935,11 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
     return;
   }
 
+  // A thread of another process has no state in this one to tear down.
+  if (reinterpret_cast<uint64_t>(Info.ClientId.UniqueProcess) != GetCurrentProcessId()) {
+    return;
+  }
+
   LogMan::Msg::IFmt("Terminating {}", Info.ClientId.UniqueThread);
   const auto ThreadTID = reinterpret_cast<uint64_t>(Info.ClientId.UniqueThread);
   bool Self = ThreadTID == GetCurrentThreadId();

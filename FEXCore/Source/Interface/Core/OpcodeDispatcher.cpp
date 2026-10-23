@@ -411,11 +411,13 @@ void OpDispatchBuilder::PUSHSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
     case FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX:
       Src = _LoadContextGPR(SrcSize, offsetof(FEXCore::Core::CPUState, ds_cached));
       break;
+    // FS and GS are the only segment registers PUSH can name in 64-bit mode. Push their selector, zero extended,
+    // which POP loads back without touching the base.
     case FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX:
-      Src = _LoadContextGPR(SrcSize, offsetof(FEXCore::Core::CPUState, fs_cached));
+      Src = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, fs_idx));
       break;
     case FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX:
-      Src = _LoadContextGPR(SrcSize, offsetof(FEXCore::Core::CPUState, gs_cached));
+      Src = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
       break;
     default: FEX_UNREACHABLE;
     }
@@ -485,8 +487,15 @@ void OpDispatchBuilder::POPAOp(OpcodeArgs) {
 void OpDispatchBuilder::POPSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
   const auto SrcSize = OpSizeFromSrc(Op);
   const auto DstSize = OpSizeFromDst(Op);
+  const auto GPRSize = GetGPROpSize();
 
-  auto NewSegment = Pop(SrcSize);
+  // An invalid selector raises #GP with RSP and the segment register unchanged, so check it before the pop. The
+  // check ends the block, so the value is loaded again after it.
+  RaiseGPIf(Op, SegmentLoadFaults(_LoadMemGPR(SrcSize, LoadGPRRegister(X86State::REG_RSP), SrcSize), SegmentReg));
+
+  Ref OldSP = LoadGPRRegister(X86State::REG_RSP);
+  Ref NewSegment = _LoadMemGPR(SrcSize, OldSP, SrcSize);
+  StoreGPRRegister(X86State::REG_RSP, Add(GPRSize, OldSP, IR::OpSizeToSize(SrcSize)));
 
   switch (SegmentReg) {
   case FEXCore::X86Tables::DecodeFlags::FLAG_ES_PREFIX:
@@ -512,7 +521,11 @@ void OpDispatchBuilder::POPSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
   default: break; // Do nothing
   }
 
-  UpdatePrefixFromSegment(NewSegment, SegmentReg);
+  // As for MOV, 64-bit mode keeps the FS and GS bases.
+  if (!Is64BitMode ||
+      (SegmentReg != FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX && SegmentReg != FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX)) {
+    UpdatePrefixFromSegment(NewSegment, SegmentReg);
+  }
 }
 
 void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
@@ -1298,10 +1311,31 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
   // selected for the registers
   // This statement is actually untrue, the instructions will /actually/ load 16bits in to the selector portion of the register!
   // Tested on a Zen+ CPU, the selector is the portion that is modified!
-  // We don't currently support FS/GS selector modifying, so this needs to be asserted out
+  // In 64-bit mode FEX keeps the FS and GS bases, which the frontend manages, and only updates the selector.
   // The loads here also load the selector, NOT the base
 
   if (ToSeg) {
+    uint32_t SegmentReg {};
+    switch (Op->Dest.Data.GPR.GPR) {
+    case FEXCore::X86State::REG_RAX:
+    case FEXCore::X86State::REG_R8: SegmentReg = FEXCore::X86Tables::DecodeFlags::FLAG_ES_PREFIX; break;
+    case FEXCore::X86State::REG_RBX:
+    case FEXCore::X86State::REG_R11: SegmentReg = FEXCore::X86Tables::DecodeFlags::FLAG_DS_PREFIX; break;
+    case FEXCore::X86State::REG_RDX:
+    case FEXCore::X86State::REG_R10: SegmentReg = FEXCore::X86Tables::DecodeFlags::FLAG_SS_PREFIX; break;
+    case FEXCore::X86State::REG_RBP:
+    case FEXCore::X86State::REG_R13: SegmentReg = FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX; break;
+    case FEXCore::X86State::REG_RSP:
+    case FEXCore::X86State::REG_R12: SegmentReg = FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX; break;
+    default: break;
+    }
+
+    if (SegmentReg) {
+      // An invalid selector raises #GP before the segment register changes. The check ends the block, so the source
+      // is loaded again after it.
+      RaiseGPIf(Op, SegmentLoadFaults(LoadSourceGPR_WithOpSize(Op, Op->Src[0], OpSize::i16Bit, Op->Flags), SegmentReg));
+    }
+
     Ref Src = LoadSourceGPR_WithOpSize(Op, Op->Src[0], OpSize::i16Bit, Op->Flags);
 
     switch (Op->Dest.Data.GPR.GPR) {
@@ -1332,22 +1366,16 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
       break;
     case FEXCore::X86State::REG_RBP: // GS
     case FEXCore::X86State::REG_R13: // GS
+      _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, gs_idx));
       if (!Is64BitMode) {
-        _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, gs_idx));
         UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX);
-      } else {
-        LogMan::Msg::EFmt("We don't support modifying GS selector in 64bit mode!");
-        DecodeFailure = true;
       }
       break;
     case FEXCore::X86State::REG_RSP: // FS
     case FEXCore::X86State::REG_R12: // FS
+      _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, fs_idx));
       if (!Is64BitMode) {
-        _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, fs_idx));
         UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX);
-      } else {
-        LogMan::Msg::EFmt("We don't support modifying FS selector in 64bit mode!");
-        DecodeFailure = true;
       }
       break;
     default: UnimplementedOp(Op); return;
@@ -1374,19 +1402,11 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
       break;
     case FEXCore::X86State::REG_RBP: // GS
     case FEXCore::X86State::REG_R13: // GS
-      if (Is64BitMode) {
-        Segment = Constant(0);
-      } else {
-        Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
-      }
+      Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
       break;
     case FEXCore::X86State::REG_RSP: // FS
     case FEXCore::X86State::REG_R12: // FS
-      if (Is64BitMode) {
-        Segment = Constant(0);
-      } else {
-        Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, fs_idx));
-      }
+      Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, fs_idx));
       break;
     default: UnimplementedOp(Op); return;
     }
@@ -4396,6 +4416,39 @@ void OpDispatchBuilder::UpdatePrefixFromSegment(Ref Segment, uint32_t SegmentReg
     break;
   default: break; // Do nothing
   }
+}
+
+Ref OpDispatchBuilder::SegmentLoadFaults(Ref Selector, uint32_t SegmentReg) {
+  // A selector has the RPL in bits [1:0], the table (GDT or LDT) in bit 2 and the index in bits [15:3].
+  Ref Table = _Bfe(OpSize::i32Bit, 1, 2, Selector);
+  Ref Index = _Bfe(OpSize::i32Bit, 13, 3, Selector);
+  Ref Entries = _LoadContextGPRIndexed(Table, OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, segment_array_entries[0]), 2);
+
+  // Past the end of its table. The null selector, index 0 of the GDT, passes this.
+  Ref Fault = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::UGE, Index, Entries, Constant(1), Constant(0));
+
+  return Fault;
+}
+
+void OpDispatchBuilder::RaiseGPIf(OpcodeArgs, Ref Fault) {
+  auto CondJump_ = CondJump(Fault, CondClass::EQ);
+  auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetFalseJumpTarget(CondJump_, FaultBlock);
+  SetCurrentCodeBlock(FaultBlock);
+  StartNewBlock();
+
+  _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+  Break(FEXCore::IR::BreakDefinition {
+    .ErrorRegister = 0,
+    .Signal = Core::FAULT_SIGSEGV,
+    .TrapNumber = X86State::X86_TRAPNO_GP,
+    .si_code = 0x80,
+  });
+
+  auto NextBlock = CreateNewCodeBlockAfter(FaultBlock);
+  SetTrueJumpTarget(CondJump_, NextBlock);
+  SetCurrentCodeBlock(NextBlock);
+  StartNewBlock();
 }
 
 uint64_t OpDispatchBuilder::CalcAddress(const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand, bool IsLoad) {

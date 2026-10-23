@@ -36,11 +36,25 @@ static inline const uint8_t* SkipPrefixes(TReg Rip) {
   return nullptr;
 }
 
-// Whether the guest instruction at Rip is IRET.
+// Whether the guest instruction at Rip loads a segment register and so raises #GP from the segment checks: IRET, MOV to
+// a segment register or POP of one.
 template<typename TReg>
-static inline bool IsIRET(TReg Rip) {
+static inline bool IsSegmentLoad(TReg Rip) {
   const auto* Code = SkipPrefixes(Rip);
-  return Code && *Code == 0xcf;
+  if (!Code) {
+    return false;
+  }
+  switch (Code[0]) {
+  case 0xcf: // IRET
+  case 0x8e: // MOV Sreg, r/m16
+    return true;
+  case 0x07: // POP ES
+  case 0x17: // POP SS
+  case 0x1f: // POP DS
+    return sizeof(TReg) == 4;
+  case 0x0f: return Code[1] == 0xa1 || Code[1] == 0xa9; // POP FS, POP GS
+  default: return false;
+  }
 }
 
 template<typename TReg>
@@ -102,9 +116,9 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
           return Dst;
         default: LogMan::Msg::EFmt("Unknown interrupt: 0x{:X}", Fault.err_code >> 3); break;
         }
-      } else if (IsIRET<TReg>(Rip)) {
-        // As on Windows, a #GP that is not from a privileged instruction, here from the segment checks of IRET, is an
-        // access violation at an unknown address.
+      } else if (IsSegmentLoad<TReg>(Rip)) {
+        // As on Windows, a #GP that is not from a privileged instruction, here from the segment checks of a segment
+        // register load, is an access violation at an unknown address.
         Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
         Dst.NumberParameters = 2;
         Dst.ExceptionInformation[0] = 0;

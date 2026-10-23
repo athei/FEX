@@ -206,6 +206,7 @@ uint64_t SyscallHandler::write_ldt(FEXCore::Core::CpuStateFrame* Frame, void* pt
 
   // Give the new LDT to CPUState.
   Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = new_ldt_entries;
+  Frame->State.segment_array_entries[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = new_ldt_count;
 
   if (old_ldt) {
     FEXCore::Allocator::munmap(old_ldt, old_ldt_entries * LDT_ENTRY_SIZE);

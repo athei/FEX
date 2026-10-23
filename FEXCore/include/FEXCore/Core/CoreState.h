@@ -212,7 +212,11 @@ struct alignas(64) CPUState {
   uint16_t FCW {0x37F};
   uint8_t AbridgedFTW {};
 
-  uint8_t _pad2[5];
+  uint8_t _pad2[1];
+
+  // Number of entries of each table in segment_arrays. Loading a selector past the end of its table raises #GP. A
+  // frontend without an LDT sets that count to 0.
+  uint16_t segment_array_entries[2] {32, 32};
   uint64_t FIP {};
 
   // Debug registers 0-3 are addresses.

@@ -1,17 +1,17 @@
 %ifdef CONFIG
 {
   "RegData": {
-    "RAX": "0x4142",
-    "RBX": "0x4143",
-    "RCX": "0x4144"
+    "RAX": "0x2b",
+    "RBX": "0x2c",
+    "RCX": "0x2d"
   }
 }
 %endif
 ; This relies on some behaviour that isn't guaranteed in 64bit mode
 
-; Technically this can result in an invalid selector which can cause faults
-; We currently don't do any selector validation to enforce this
-mov rax, 0x4142
+; A selector past the end of its table raises #GP, so these stay inside the
+; 32-entry GDT and LDT
+mov rax, 0x2b
 
 db 0x44 ; REX.R
 mov es, ax

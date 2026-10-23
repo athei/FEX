@@ -188,6 +188,12 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
     return {Address, 0};
   }
 
+  // Only a view of a section can be unmapped. For free memory (type 0) or a private allocation the unmap fails, and
+  // the allocation, which may hold live code, must stay tracked.
+  if (Info.Type != MEM_IMAGE && Info.Type != MEM_MAPPED) {
+    return {Address, 0};
+  }
+
   const auto SectionBase = reinterpret_cast<uint64_t>(Info.AllocationBase);
   auto SectionSize = reinterpret_cast<uint64_t>(Info.BaseAddress) + Info.RegionSize - SectionBase;
 

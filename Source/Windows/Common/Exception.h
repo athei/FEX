@@ -9,6 +9,40 @@
 #include <FEXCore/Debug/InternalThreadState.h>
 
 namespace FEX::Windows {
+// The opcode of the guest instruction at Rip, past its legacy and (64-bit only) REX prefixes, or nullptr when the
+// prefixes take up the 15 bytes an instruction can have.
+template<typename TReg>
+static inline const uint8_t* SkipPrefixes(TReg Rip) {
+  const auto* Code = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(Rip));
+  for (size_t i = 0; i < 15; i++, Code++) {
+    switch (*Code) {
+    case 0x26:
+    case 0x2e:
+    case 0x36:
+    case 0x3e:
+    case 0x64:
+    case 0x65:
+    case 0x66:
+    case 0x67:
+    case 0xf2:
+    case 0xf3: continue;
+    default:
+      if (sizeof(TReg) == 8 && (*Code & 0xf0) == 0x40) {
+        continue;
+      }
+      return Code;
+    }
+  }
+  return nullptr;
+}
+
+// Whether the guest instruction at Rip is IRET.
+template<typename TReg>
+static inline bool IsIRET(TReg Rip) {
+  const auto* Code = SkipPrefixes(Rip);
+  return Code && *Code == 0xcf;
+}
+
 template<typename TReg>
 static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
                                                     const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx, BOOL& FirstChance) {
@@ -68,6 +102,14 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
           return Dst;
         default: LogMan::Msg::EFmt("Unknown interrupt: 0x{:X}", Fault.err_code >> 3); break;
         }
+      } else if (IsIRET<TReg>(Rip)) {
+        // As on Windows, a #GP that is not from a privileged instruction, here from the segment checks of IRET, is an
+        // access violation at an unknown address.
+        Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+        Dst.NumberParameters = 2;
+        Dst.ExceptionInformation[0] = 0;
+        Dst.ExceptionInformation[1] = static_cast<TReg>(~TReg {0});
+        return Dst;
       } else {
         Dst.ExceptionCode = EXCEPTION_PRIV_INSTRUCTION;
         return Dst;

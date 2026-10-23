@@ -138,6 +138,33 @@ void OpDispatchBuilder::IRETOp(OpcodeArgs) {
 
   const auto GPRSize = GetGPROpSize();
 
+  {
+    // A null code segment selector raises #GP(0) before IRET changes any state. Check it before the pops below
+    // move RSP.
+    Ref OldSP = LoadGPRRegister(X86State::REG_RSP);
+    Ref NewCS = _LoadMemGPR(OpSize::i16Bit, Add(OpSize::i64Bit, OldSP, IR::OpSizeToSize(GPRSize)), OpSize::i16Bit);
+    Ref CSIndex = _And(OpSize::i32Bit, NewCS, Constant(0xfffc));
+
+    auto CondJump_ = CondJump(CSIndex, CondClass::NEQ);
+    auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+    SetFalseJumpTarget(CondJump_, FaultBlock);
+    SetCurrentCodeBlock(FaultBlock);
+    StartNewBlock();
+
+    _StoreContextGPR(GPRSize, GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+    Break(FEXCore::IR::BreakDefinition {
+      .ErrorRegister = 0,
+      .Signal = Core::FAULT_SIGSEGV,
+      .TrapNumber = X86State::X86_TRAPNO_GP,
+      .si_code = 0x80,
+    });
+
+    auto ValidBlock = CreateNewCodeBlockAfter(FaultBlock);
+    SetTrueJumpTarget(CondJump_, ValidBlock);
+    SetCurrentCodeBlock(ValidBlock);
+    StartNewBlock();
+  }
+
   Ref SP = _RMWHandle(LoadGPRRegister(X86State::REG_RSP));
 
   // RIP (64/32/16 bits)

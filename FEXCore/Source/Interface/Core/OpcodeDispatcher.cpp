@@ -5067,6 +5067,29 @@ void OpDispatchBuilder::INTOp(OpcodeArgs) {
           StoreGPRRegister(X86State::REG_RAX, _CycleCounter(false));
           return;
         }
+
+        // Debug service. x64 Windows raises no exception for the services that only talk to a kernel debugger,
+        // BREAKPOINT_PRINT (1), BREAKPOINT_LOAD_SYMBOLS (3), BREAKPOINT_UNLOAD_SYMBOLS (4) and
+        // BREAKPOINT_COMMAND_STRING (5), and continues after the byte that follows the INT. The other services raise
+        // the breakpoint below.
+        constexpr uint8_t DEBUG_SERVICE_LITERAL = 0x2D;
+        if (Literal == DEBUG_SERVICE_LITERAL && Is64BitMode) {
+          Ref Service = LoadGPRRegister(X86State::REG_RAX);
+          Ref Ignored = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::EQ, Service, Constant(1), Constant(1), Constant(0));
+          Ignored = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::ULE, Sub(OpSize::i64Bit, Service, 3), Constant(2), Constant(1), Ignored);
+
+          auto CondJump_ = CondJump(Ignored, CondClass::EQ);
+          auto SkipBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+          SetFalseJumpTarget(CondJump_, SkipBlock);
+          SetCurrentCodeBlock(SkipBlock);
+          StartNewBlock();
+          ExitFunction(GetRelocatedPC(Op, 1));
+
+          auto RaiseBlock = CreateNewCodeBlockAfter(SkipBlock);
+          SetTrueJumpTarget(CondJump_, RaiseBlock);
+          SetCurrentCodeBlock(RaiseBlock);
+          StartNewBlock();
+        }
       }
     }
 

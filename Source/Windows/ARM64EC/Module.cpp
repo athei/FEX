@@ -507,7 +507,19 @@ static bool HandleUnalignedAccess(const ThreadCPUArea CPUArea, ARM64_NT_CONTEXT&
   return Result.has_value();
 }
 
-static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, CONTEXT& Context) {
+static uint16_t GetX87StatusWord(const FEXCore::Core::CPUState& State) {
+  return (State.flags[FEXCore::X86State::X87FLAG_TOP_LOC] << 11) | (State.flags[FEXCore::X86State::X87FLAG_C0_LOC] << 8) |
+         (State.flags[FEXCore::X86State::X87FLAG_C1_LOC] << 9) | (State.flags[FEXCore::X86State::X87FLAG_C2_LOC] << 10) |
+         (State.flags[FEXCore::X86State::X87FLAG_C3_LOC] << 14) | State.flags[FEXCore::X86State::X87FLAG_IE_LOC];
+}
+
+// An ARM64EC context holds the low 80 bits of each x87 register slot (see StoreStateToPackedECContext), and has no place
+// for the x87 control, status and tag words. An x64 context that ntdll converts from one, as for every reentry into the
+// JIT through BeginSimulation, carries zeroes for the words and the rest of each slot. FromECContext is true for those:
+// the thread's own words and the rest of each slot are kept then, since only emulated code changes them. With reduced
+// precision x87 the rest of a slot holds the integer a value was loaded from, which the x87 code checks against the
+// value before using it.
+static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, CONTEXT& Context, bool FromECContext) {
   auto& State = Thread->CurrentFrame->State;
 
   if ((Context.ContextFlags & CONTEXT_INTEGER) == CONTEXT_INTEGER) {
@@ -566,8 +578,17 @@ static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, C
     } else {
       CTX->SetXMMRegistersFromState(Thread, reinterpret_cast<const __uint128_t*>(Context.FltSave.XmmRegisters), nullptr);
     }
-    memcpy(State.mm, Context.FltSave.FloatRegisters, sizeof(State.mm));
+    if (FromECContext) {
+      for (size_t i = 0; i < std::size(State.mm); i++) {
+        State.mm[i][0] = Context.FltSave.FloatRegisters[i].Low;
+        State.mm[i][1] = (State.mm[i][1] & ~0xffffULL) | (static_cast<uint64_t>(Context.FltSave.FloatRegisters[i].High) & 0xffff);
+      }
+    } else {
+      memcpy(State.mm, Context.FltSave.FloatRegisters, sizeof(State.mm));
+    }
+  }
 
+  if (!FromECContext && (Context.ContextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT) {
     State.FCW = Context.FltSave.ControlWord;
     State.flags[FEXCore::X86State::X87FLAG_IE_LOC] = Context.FltSave.StatusWord & 1;
     State.flags[FEXCore::X86State::X87FLAG_C0_LOC] = (Context.FltSave.StatusWord >> 8) & 1;
@@ -796,7 +817,7 @@ extern "C" void SyncThreadContext(CONTEXT* Context) {
 
   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);
-  Exception::LoadStateFromECContext(Thread, *Context);
+  Exception::LoadStateFromECContext(Thread, *Context, true);
 
   // BeginSimulation enters the dispatcher next.
   FEX::Windows::HardwareTSO::EnsureOn(Thread->CurrentFrame);
@@ -1096,6 +1117,15 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
     NtContinueNative(NativeContext, false);
   }
 
+  // The exception goes to the guest's handlers. ntdll converted their context from an ARM64EC one, which has no x87
+  // control, status and tag words, so give them the thread's own.
+  if ((GuestContext->ContextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT) {
+    const auto& State = CPUArea.ThreadState()->CurrentFrame->State;
+    GuestContext->FltSave.ControlWord = State.FCW;
+    GuestContext->FltSave.StatusWord = Exception::GetX87StatusWord(State);
+    GuestContext->FltSave.TagWord = State.AbridgedFTW;
+  }
+
   CPUArea.Area->InSimulation = false;
   CPUArea.Area->InSyscallCallback = false;
   return STATUS_SUCCESS;
@@ -1327,7 +1357,7 @@ NTSTATUS ThreadInit() {
                             .AMD64_MxCsr = 0x1f80,
                             .AMD64_MxCsr_copy = 0x1f80,
                             .AMD64_ControlWord = 0x27f};
-  Exception::LoadStateFromECContext(Thread, CPUArea.ContextAmd64().AMD64_Context);
+  Exception::LoadStateFromECContext(Thread, CPUArea.ContextAmd64().AMD64_Context, false);
 
   Thread->FrontendPtr = new FrontendThreadData();
 

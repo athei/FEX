@@ -4427,6 +4427,22 @@ Ref OpDispatchBuilder::SegmentLoadFaults(Ref Selector, uint32_t SegmentReg) {
   // Past the end of its table. The null selector, index 0 of the GDT, passes this.
   Ref Fault = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::UGE, Index, Entries, Constant(1), Constant(0));
 
+  if (SegmentReg == FEXCore::X86Tables::DecodeFlags::FLAG_SS_PREFIX) {
+    // SS can't be null or a code segment. For a selector past the end of its table, which faults anyway, read entry
+    // 0 instead of past the table.
+    Ref Null = _And(OpSize::i32Bit, Selector, Constant(0xfffc));
+    Fault = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::EQ, Null, Constant(0), Constant(1), Fault);
+
+    Ref Offset =
+      _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::UGE, Index, Entries, Constant(0), _And(OpSize::i32Bit, Selector, Constant(0xfff8)));
+    Ref TableBase = _LoadContextGPRIndexed(Table, OpSize::i64Bit, offsetof(FEXCore::Core::CPUState, segment_arrays[0]), 8);
+    Ref Descriptor = _LoadMemGPR(OpSize::i64Bit, TableBase, Offset, OpSize::i8Bit, MemOffsetType::UXTW, 1);
+
+    // S (bit 44) and the code bit of the type (bit 43) are both set for a code segment.
+    Ref CodeBits = _Bfe(OpSize::i64Bit, 2, 43, Descriptor);
+    Fault = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::EQ, CodeBits, Constant(3), Constant(1), Fault);
+  }
+
   return Fault;
 }
 

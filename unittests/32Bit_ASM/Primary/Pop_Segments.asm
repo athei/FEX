@@ -9,7 +9,10 @@
 %endif
 
 mov esp, 0xe0000040
-mov eax, 0
+; SS can't be null, so pop the data selector the test setup loads into DS.
+; Both halves of EAX hold it, since the 16-bit and 32-bit pops below read
+; the pushed words at different offsets.
+mov eax, 0x00170017
 
 push eax
 push eax

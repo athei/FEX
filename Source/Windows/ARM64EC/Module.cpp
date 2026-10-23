@@ -1282,6 +1282,11 @@ NTSTATUS ThreadInit() {
   FEXCore::Core::CPUState::SetGDTLimit(&GDT, 0xF'FFFFU);
   GDT.L = 1; // L = Long Mode = 64-bit
   GDT.D = 0; // D = Default Operand SIze = Reserved
+  // A present user code segment: execute/read and accessed, not a system descriptor
+  GDT.Type = 0xB;
+  GDT.S = 1;
+  GDT.DPL = 3;
+  GDT.P = 1;
 
   Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_GDT] = &NewSegments[0];
   // TODO: LDTs are currently unsupported, mirror them to GDT.

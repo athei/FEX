@@ -2863,6 +2863,11 @@ private:
   uint32_t SegmentsNeedReadCheck {~0U};
   void CheckLegacySegmentWrite(Ref NewNode, uint32_t SegmentReg);
   void CheckLegacySegmentRead(Ref NewNode, uint32_t SegmentReg);
+
+  // Non-zero when loading the selector into the segment register raises #GP.
+  Ref SegmentLoadFaults(Ref Selector, uint32_t SegmentReg);
+  // Raises #GP(0) at this instruction when Fault is non-zero, and continues in a new block otherwise.
+  void RaiseGPIf(FEXCore::X86Tables::DecodedOp Op, Ref Fault);
 };
 
 constexpr inline void InstallToTable(auto& FinalTable, const auto& LocalTable) {

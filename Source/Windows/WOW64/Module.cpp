@@ -872,6 +872,8 @@ static void InitThreadLocked() {
   Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_GDT] = &NewSegments[0];
   // TODO: LDTs are currently unsupported, mirror them to GDT.
   Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = &NewSegments[0];
+  // No LDT, so an LDT selector raises #GP.
+  Frame->State.segment_array_entries[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = 0;
 
   Frame->State.cs_idx = DefaultWow64CS << 3;
   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);

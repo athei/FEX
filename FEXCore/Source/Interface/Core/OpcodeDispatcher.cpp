@@ -401,8 +401,36 @@ void OpDispatchBuilder::PUSHSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
 }
 
 void OpDispatchBuilder::POPOp(OpcodeArgs) {
-  Ref Value = Pop(OpSizeFromSrc(Op));
-  StoreResultGPR(Op, Value);
+  const auto Size = OpSizeFromSrc(Op);
+
+  if (Op->Dest.IsGPR()) {
+    Ref Value = Pop(Size);
+    StoreResultGPR(Op, Value);
+    return;
+  }
+
+  // With a memory destination the store can fault, and RSP must still hold
+  // its old value when it does. The post-incrementing Pop would update RSP
+  // before the store, so load, store and only then write the new RSP.
+  const auto GPRSize = GetGPROpSize();
+  const auto SizeInt = IR::OpSizeToSize(Size);
+
+  Ref OldSP = LoadGPRRegister(X86State::REG_RSP);
+  Ref Value = _LoadMemGPR(Size, OldSP, Size);
+
+  // An address based on RSP is computed with the incremented RSP. Fold the
+  // increment into the displacement rather than computing the new RSP ahead
+  // of the store, where register allocation could write it to RSP early.
+  AddressMode A = DecodeAddress(Op, Op->Dest, MemoryAccessType::DEFAULT, false /* IsLoad */);
+  const auto& Dest = Op->Dest;
+  const bool RSPBase = ((Dest.IsGPRIndirect() || Dest.IsGPRIndirectRelocation()) && Dest.Data.GPRIndirect.GPR == X86State::REG_RSP) ||
+                       ((Dest.IsSIB() || Dest.IsSIBRelocation()) && Dest.Data.SIB.Base == X86State::REG_RSP);
+  if (RSPBase) {
+    A.Offset += SizeInt;
+  }
+  _StoreMemGPRAutoTSO(Size, A, Value, Size);
+
+  StoreGPRRegister(X86State::REG_RSP, Add(GPRSize, OldSP, SizeInt));
 }
 
 void OpDispatchBuilder::POPAOp(OpcodeArgs) {

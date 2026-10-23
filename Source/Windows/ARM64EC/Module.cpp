@@ -684,8 +684,16 @@ static void RaiseException(FEXCore::Core::InternalThreadState* Thread, const EXC
   if (GuestRec.ExceptionCode == EXCEPTION_SINGLE_STEP) {
     GuestContext.Cpsr &= ~(1 << 21); // PSTATE.SS
   } else if (GuestRec.ExceptionCode == EXCEPTION_BREAKPOINT) {
-    // INT3 will set RIP to the instruction following it, undo this (any edge cases with multibyte instructions that trigger breakpoints are bugs present in Windows also)
-    GuestContext.Pc -= 1;
+    // INT3 will set RIP to the instruction following it, and the handlers expect it on the INT3 (any edge cases with
+    // multibyte instructions that trigger breakpoints are bugs present in Windows also). A debugger expects it after
+    // the INT3, as on x64, so when the kernel reports the exception to one, leave it there: the kernel moves it back
+    // once the debugger passes the exception on to the handlers. The kernel only reports it with BeingDebugged set
+    // and a debug object attached, so test the same, the PEB flag first, which spares the query without a debugger.
+    const bool BeingDebugged = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->BeingDebugged;
+    ULONG_PTR DebugPort {};
+    if (!BeingDebugged || NtQueryInformationProcess(NtCurrentProcess(), ProcessDebugPort, &DebugPort, sizeof(DebugPort), nullptr) || !DebugPort) {
+      GuestContext.Pc -= 1;
+    }
   }
 
   NtRaiseExceptionNative(&GuestRec, &GuestContext, FirstChance);

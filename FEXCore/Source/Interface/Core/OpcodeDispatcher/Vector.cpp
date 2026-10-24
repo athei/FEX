@@ -3240,7 +3240,21 @@ void OpDispatchBuilder::XRstorOpImpl(OpcodeArgs) {
         Ref MXCSR = _LoadMemGPR(OpSize::i32Bit, Base, Constant(24), OpSize::i32Bit, MemOffsetType::SXTX, 1);
         RestoreMXCSRState(MXCSR);
       },
-      [] { /* Intentionally do nothing*/ }, 2);
+      [this, &RestoreIfFlagSetOrDefault] {
+        // Without MXCSR, a restored x87 control word sets the rounding mode as FRSTOR does. The default x87 state
+        // already did in FNINIT.
+        if (ReducedPrecisionMode) {
+          RestoreIfFlagSetOrDefault(
+            0,
+            [this] {
+              Ref FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
+              Ref RoundingMode = _Bfe(OpSize::i32Bit, 2, 10, FCW);
+              _SetRoundingMode(RoundingMode, false, RoundingMode);
+            },
+            [] { });
+        }
+      },
+      2);
   }
 }
 
@@ -3293,13 +3307,24 @@ void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
   }
 }
 
-void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR) {
+void OpDispatchBuilder::RestoreMXCSRState(Ref MXCSR, bool ForStateRestore) {
   // Mask out unsupported bits
   MXCSR = _And(OpSize::i32Bit, MXCSR, Constant(0xFFC0));
 
   _StoreContextGPR(OpSize::i32Bit, MXCSR, offsetof(FEXCore::Core::CPUState, mxcsr));
   // We only support the rounding mode and FTZ bit being set
   Ref RoundingMode = _Bfe(OpSize::i32Bit, 3, 13, MXCSR);
+  if (ForStateRestore && ReducedPrecisionMode) {
+    // x87 arithmetic rounds by FPCR as well, which has one rounding mode for both. FXRSTOR and XRSTOR restore the
+    // x87 control word too, and give no hint which of the two the code after them uses, unlike FLDCW and LDMXCSR. Take
+    // the x87 rounding control when MXCSR asks for round to nearest, so that a non-default rounding control in
+    // either one takes effect. Otherwise a restored x87 control word would never reach FPCR.
+    Ref FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
+    Ref X87RoundingMode = _Bfe(OpSize::i32Bit, 2, 10, FCW);
+    Ref SSERoundingMode = _Bfe(OpSize::i32Bit, 2, 13, MXCSR);
+    RoundingMode = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::EQ, SSERoundingMode, Constant(0),
+                           _Or(OpSize::i32Bit, RoundingMode, X87RoundingMode), RoundingMode);
+  }
   _SetRoundingMode(RoundingMode, true, MXCSR);
 }
 
@@ -3403,7 +3428,7 @@ void OpDispatchBuilder::UCOMISxOp(OpcodeArgs, IR::OpSize ElementSize) {
 
 void OpDispatchBuilder::LDMXCSR(OpcodeArgs) {
   Ref Dest = LoadSourceGPR_WithOpSize(Op, Op->Dest, OpSize::i32Bit, Op->Flags);
-  RestoreMXCSRState(Dest);
+  RestoreMXCSRState(Dest, false);
 }
 
 void OpDispatchBuilder::STMXCSR(OpcodeArgs) {

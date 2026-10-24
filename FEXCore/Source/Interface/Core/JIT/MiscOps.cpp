@@ -140,13 +140,17 @@ DEF_OP(SetRoundingMode) {
     bfi(ARMEmitter::Size::i64Bit, TMP1, TMP2, 22, 2);
   }
 
-  // Insert the FTZ flag
-  lsr(ARMEmitter::Size::i64Bit, TMP2, Src, 2);
-  bfi(ARMEmitter::Size::i64Bit, TMP1, TMP2, 24, 1);
+  if (Op->SetDAZ) {
+    // Only an MXCSR write sets SetDAZ, and FPCR.FZ follows MXCSR.FTZ alone. An x87 control word write leaves it, so
+    // the x87 infinity control bit cannot turn flush to zero on and FNINIT cannot turn it off.
+    // Insert the FTZ flag
+    lsr(ARMEmitter::Size::i64Bit, TMP2, Src, 2);
+    bfi(ARMEmitter::Size::i64Bit, TMP1, TMP2, 24, 1);
 
-  if (Op->SetDAZ && HostSupportsAFP) {
-    // Extract DAZ from MXCSR and insert to in FPCR.FIZ
-    bfxil(ARMEmitter::Size::i64Bit, TMP1, MXCSR, 6, 1);
+    if (HostSupportsAFP) {
+      // Extract DAZ from MXCSR and insert to in FPCR.FIZ
+      bfxil(ARMEmitter::Size::i64Bit, TMP1, MXCSR, 6, 1);
+    }
   }
 
   // Now save the new FPCR

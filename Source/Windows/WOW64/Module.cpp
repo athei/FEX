@@ -124,6 +124,14 @@ struct FrontendThreadData {
   // Set from the first to the second notification around a syscall when the first one entered the syscall callback state
   bool NotifyEnteredSyscallCallback {};
   CHPE_V2_CPU_AREA_INFO CpuArea {};
+  // The guest's FPCR rounding mode and flush to zero when the thread last left the JIT, with the x87 control word and
+  // MXCSR at that time, see Context::RestoreGuestFPCR.
+  struct {
+    uint32_t FPCRBits {};
+    uint32_t MXCSR {};
+    uint16_t FCW {};
+    bool Valid {};
+  } GuestFPCR;
 
   // Takes over from the CPU area that BTCpuThreadInit set up for the thread: its syscall callback state, and a suspend
   // that Wine requested through its doorbell. The doorbell is read again once Wine sees only the new area.
@@ -160,6 +168,9 @@ std::optional<FEX::Windows::InvalidationTracker> InvalidationTracker;
 std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
 std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
 std::optional<FEX::Windows::ImageTracker> ImageTracker;
+
+// With reduced precision x87, x87 arithmetic rounds by FPCR, see FPCRForControlWords.
+bool X87ReducedPrecision {};
 
 // The thread terminating the process, see BTCpuProcessTerm. Claimed with acquire-release, and cleared with release once
 // TerminationSuspendedThreads is empty again.
@@ -376,6 +387,64 @@ void HandleImageUnmap(uint64_t Address, uint64_t Size) {
 } // namespace
 
 namespace Context {
+// Whether a change of the x87 control word or MXCSR from Old to New changes what FPCRForControlWords returns.
+static bool FPCRControlWordsChanged(uint16_t OldFCW, uint32_t OldMXCSR, uint16_t NewFCW, uint32_t NewMXCSR) {
+  return (X87ReducedPrecision && ((OldFCW ^ NewFCW) & 0xc00)) || ((OldMXCSR ^ NewMXCSR) & 0xe000);
+}
+
+// Returns FPCR with the rounding mode and flush to zero of the x87 control word FCW and MXCSR, combined as FXRSTOR
+// does (see RestoreMXCSRState): MXCSR's rounding control, or with reduced precision x87, which rounds by FPCR as well,
+// the x87 one when MXCSR asks for round to nearest. FZ follows MXCSR.FTZ. DAZ reaches FPCR.FIZ when the JIT is entered.
+static uint64_t FPCRForControlWords(uint64_t FPCR, uint16_t FCW, uint32_t MXCSR) {
+  // x86 orders the rounding modes nearest, down, up, toward zero, FPCR.RMode nearest, up, down, toward zero.
+  static constexpr uint64_t RModeFromX86[4] = {0, 2, 1, 3};
+  uint32_t RoundingControl = (MXCSR >> 13) & 3;
+  if (RoundingControl == 0 && X87ReducedPrecision) {
+    RoundingControl = (FCW >> 10) & 3;
+  }
+  const uint64_t FZ = (MXCSR >> 15) & 1;
+  return (FPCR & ~((3ULL << 22) | (1ULL << 24))) | (RModeFromX86[RoundingControl] << 22) | (FZ << 24);
+}
+
+static constexpr uint64_t FPCRRoundingBits = (3ULL << 22) | (1ULL << 24); // RMode and FZ
+
+static uint64_t ReadFPCR() {
+  uint64_t FPCR;
+  __asm volatile("mrs %[fpcr], fpcr" : [fpcr] "=r"(FPCR));
+  return FPCR;
+}
+
+// Saves the guest's FPCR rounding mode and flush to zero as the thread leaves the JIT, with the control words they were
+// set under, for RestoreGuestFPCR.
+static void SaveGuestFPCR(FEXCore::Core::InternalThreadState* Thread, uint64_t FPCR) {
+  auto* Data = GetFrontendThreadData(Thread);
+  if (!Data) {
+    return;
+  }
+  const auto& State = Thread->CurrentFrame->State;
+  Data->GuestFPCR = {.FPCRBits = static_cast<uint32_t>(FPCR & FPCRRoundingBits), .MXCSR = State.mxcsr, .FCW = State.FCW, .Valid = true};
+}
+
+// Gives FPCR the guest's rounding mode and flush to zero as the thread enters the JIT. FPCR is what native code left
+// there, such as the one of the entry context saved at an earlier entry after an exception a handler continued from, or
+// the one restored when a kernel callback returns. While the x87 control word and MXCSR are the ones the thread left
+// the JIT with, the bits saved then are the guest's own, set by the last of FLDCW, LDMXCSR and the like. A context that
+// changed either one, through SetThreadContext or NtContinue, applies them as FXRSTOR does.
+static void RestoreGuestFPCR(FEXCore::Core::InternalThreadState* Thread) {
+  const auto& State = Thread->CurrentFrame->State;
+  const auto* Data = GetFrontendThreadData(Thread);
+  const uint64_t FPCR = ReadFPCR();
+  uint64_t NewFPCR;
+  if (Data && Data->GuestFPCR.Valid && !FPCRControlWordsChanged(Data->GuestFPCR.FCW, Data->GuestFPCR.MXCSR, State.FCW, State.mxcsr)) {
+    NewFPCR = (FPCR & ~FPCRRoundingBits) | Data->GuestFPCR.FPCRBits;
+  } else {
+    NewFPCR = FPCRForControlWords(FPCR, State.FCW, State.mxcsr);
+  }
+  if (NewFPCR != FPCR) {
+    __asm volatile("msr fpcr, %[fpcr]" ::[fpcr] "r"(NewFPCR));
+  }
+}
+
 void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread) {
   auto& State = Thread->CurrentFrame->State;
   WOW64_CONTEXT* Context = GetWow64Context();
@@ -419,6 +488,9 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread) {
   memcpy(State.mm, XSave->FloatRegisters, sizeof(State.mm));
 
   State.FCW = XSave->ControlWord;
+  // Exception flags are not kept, as in LDMXCSR.
+  State.mxcsr = XSave->MxCsr & 0xffc0;
+  RestoreGuestFPCR(Thread);
   State.flags[FEXCore::X86State::X87FLAG_IE_LOC] = XSave->StatusWord & 1;
   State.flags[FEXCore::X86State::X87FLAG_C0_LOC] = (XSave->StatusWord >> 8) & 1;
   State.flags[FEXCore::X86State::X87FLAG_C1_LOC] = (XSave->StatusWord >> 9) & 1;
@@ -461,6 +533,7 @@ void StoreWowContextFromState(WOW64_CONTEXT* Context) {
   memcpy(XSave->FloatRegisters, State.mm, sizeof(State.mm));
 
   XSave->ControlWord = State.FCW;
+  XSave->MxCsr = State.mxcsr;
   XSave->StatusWord = (State.flags[FEXCore::X86State::X87FLAG_TOP_LOC] << 11) | (State.flags[FEXCore::X86State::X87FLAG_C0_LOC] << 8) |
                       (State.flags[FEXCore::X86State::X87FLAG_C1_LOC] << 9) | (State.flags[FEXCore::X86State::X87FLAG_C2_LOC] << 10) |
                       (State.flags[FEXCore::X86State::X87FLAG_C3_LOC] << 14) | State.flags[FEXCore::X86State::X87FLAG_IE_LOC];
@@ -508,10 +581,6 @@ WOW64_CONTEXT* ReconstructWowContext(CONTEXT* Context) {
   }
 
   WOW64_CONTEXT* WowContext = GetWow64Context();
-  auto* XSave = reinterpret_cast<XSAVE_FORMAT*>(WowContext->ExtendedRegisters);
-  XSave->ControlWord = 0x27f;
-  XSave->MxCsr = 0x1f80;
-
   StoreWowContextFromState(WowContext);
   return WowContext;
 }
@@ -559,9 +628,15 @@ bool HandleSuspendInterrupt(CONTEXT* Context) {
   ReconstructThreadState(Context);
   FlushThreadStateContext();
 
+  SaveGuestFPCR(GetTLS().ThreadState(), Context->Fpcr);
+
   // Yield to the suspender
   UnlockJITContext();
   LockJITContext();
+
+  // Resuming restores FPCR from Context, so give it the rounding mode and flush to zero LockJITContext gave FPCR, which
+  // a context the suspender set may have changed.
+  Context->Fpcr = static_cast<uint32_t>((Context->Fpcr & ~FPCRRoundingBits) | (ReadFPCR() & FPCRRoundingBits));
 
   // Adjust context to return to the dispatcher, reloading SRA from thread state
   const auto& Config = SignalDelegator->GetConfig();
@@ -607,6 +682,9 @@ public:
     const uint64_t ReturnRIP = *(uint32_t*)(Frame->State.gregs[FEXCore::X86State::REG_RSP]); // Return address from the stack
     uint64_t ReturnRSP = Frame->State.gregs[FEXCore::X86State::REG_RSP] + 4;                 // Stack pointer after popping return address
     uint64_t ReturnRAX = 0;
+
+    // Native code may change FPCR before the thread enters the JIT again, see RestoreGuestFPCR.
+    Context::SaveGuestFPCR(Frame->Thread, Context::ReadFPCR());
 
     if (Frame->State.rip == (uint64_t)BridgeInstrs::UnixCall) {
       struct StackLayout {
@@ -756,6 +834,8 @@ void BTCpuProcessInit() {
   FEX_CONFIG_OPT(ProfileStats, PROFILESTATS);
   FEX_CONFIG_OPT(StartupSleep, STARTUPSLEEP);
   FEX_CONFIG_OPT(StartupSleepProcName, STARTUPSLEEPPROCNAME);
+  FEX_CONFIG_OPT(X87ReducedPrecisionConfig, X87REDUCEDPRECISION);
+  X87ReducedPrecision = X87ReducedPrecisionConfig();
 
   if (IsWine && ProfileStats()) {
     StatAllocHandler = fextl::make_unique<FEX::Windows::StatAlloc>(FEXCore::SHMStats::AppType::WIN_WOW64);
@@ -1162,6 +1242,8 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
 
   LogMan::Msg::DFmt("Reconstructing context");
 
+  // The guest's handlers run on an entry context saved at an earlier entry into the JIT, see RestoreGuestFPCR.
+  Context::SaveGuestFPCR(Thread, Context->Fpcr);
   WOW64_CONTEXT* WowContext = Context::ReconstructWowContext(Context);
   LogMan::Msg::DFmt("pc: {:X} eip: {:X} code: {:X}", Context->Pc, WowContext->Eip, Exception->ExceptionCode);
 

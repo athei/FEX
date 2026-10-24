@@ -13,7 +13,7 @@
       "SVE256",
       "AFP"
     ],
-    "BinaryCacheVersion": 41
+    "BinaryCacheVersion": 42
   },
   "Instructions": {
     "fadd dword [rax]": {
@@ -1480,19 +1480,17 @@
       ]
     },
     "fldenv [rax]": {
-      "ExpectedInstructionCount": 33,
+      "ExpectedInstructionCount": 31,
       "Comment": [
         "0xd9 !11b /4"
       ],
       "ExpectedArm64ASM": [
         "ldrh w20, [x4]",
-        "ubfx w21, w20, #10, #3",
+        "ubfx w21, w20, #10, #2",
         "rbit w1, w21",
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "strh w20, [x28, #1200]",
         "ldr w20, [x4, #4]",
@@ -1521,19 +1519,17 @@
       ]
     },
     "fldcw [rax]": {
-      "ExpectedInstructionCount": 10,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xd9 !11b /5"
       ],
       "ExpectedArm64ASM": [
         "ldrh w20, [x4]",
-        "ubfx w21, w20, #10, #3",
+        "ubfx w21, w20, #10, #2",
         "rbit w1, w21",
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "strh w20, [x28, #1200]"
       ]
@@ -4161,7 +4157,7 @@
       ]
     },
     "fninit": {
-      "ExpectedInstructionCount": 17,
+      "ExpectedInstructionCount": 15,
       "Comment": [
         "0xdb 11b 0xe3 /4"
       ],
@@ -4171,8 +4167,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x20, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "mov w20, #0x37f",
         "strh w20, [x28, #1200]",
@@ -5497,7 +5491,7 @@
       ]
     },
     "frstor [rax]": {
-      "ExpectedInstructionCount": 141,
+      "ExpectedInstructionCount": 139,
       "Comment": [
         "0xdd !11b /4"
       ],
@@ -5510,8 +5504,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x20, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "ldr w20, [x4, #4]",
         "ubfx w21, w20, #11, #3",
@@ -5646,7 +5638,7 @@
       ]
     },
     "fnsave [rax]": {
-      "ExpectedInstructionCount": 143,
+      "ExpectedInstructionCount": 141,
       "Comment": [
         "0xdd !11b /6"
       ],
@@ -5782,8 +5774,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "mov w20, #0x37f",
         "strh w20, [x28, #1200]",

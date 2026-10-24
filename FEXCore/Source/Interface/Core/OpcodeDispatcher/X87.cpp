@@ -549,7 +549,8 @@ void OpDispatchBuilder::X87FRSTOR(OpcodeArgs) {
   auto NewFCW = _LoadMemGPR(OpSize::i16Bit, Mem, OpSize::i16Bit);
   _StoreContextGPR(OpSize::i16Bit, NewFCW, offsetof(FEXCore::Core::CPUState, FCW));
   if (ReducedPrecisionMode) {
-    // ignore the rounding precision, we're always 64-bit in F64.
+    // The values are 64-bit floats. The JIT applies 24-bit precision control
+    // to them when the block is entered, see X87ControlWordChanged.
     // extract rounding mode
     Ref roundingMode = NewFCW;
     auto roundShift = Constant(10);
@@ -598,6 +599,8 @@ void OpDispatchBuilder::X87FRSTOR(OpcodeArgs) {
     _StoreContextFPRIndexed(LoadZeroVector(OpSize::i64Bit), Top, OpSize::i64Bit, MMBaseOffset() + 8, IR::OpSizeToSize(OpSize::i128Bit));
   }
   _StoreContextFPRIndexed(Reg, Top, StoreSize, MMBaseOffset(), IR::OpSizeToSize(OpSize::i128Bit));
+
+  X87ControlWordChanged();
 }
 
 // Load / Store Control Word
@@ -812,6 +815,9 @@ void OpDispatchBuilder::FNINIT(OpcodeArgs) {
   SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(Zero);
   SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(Zero);
   SetRFLAG<FEXCore::X86State::X87FLAG_IE_LOC>(Zero);
+
+  // Also for FNSAVE and the default state of XRSTOR, which end with this.
+  X87ControlWordChanged();
 }
 
 void OpDispatchBuilder::X87FFREE(OpcodeArgs) {

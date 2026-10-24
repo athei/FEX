@@ -119,6 +119,14 @@
     "constexpr uint8_t FCMP_FLAG_LT        = 1",
     "constexpr uint8_t FCMP_FLAG_UNORDERED = 2",
 
+    "constexpr uint8_t X87PC_ADD  = 0",
+    "constexpr uint8_t X87PC_SUB  = 1",
+    "constexpr uint8_t X87PC_MUL  = 2",
+    "constexpr uint8_t X87PC_DIV  = 3",
+    "constexpr uint8_t X87PC_SQRT = 4",
+    "constexpr uint8_t X87PC_NEG  = 5",
+    "constexpr uint8_t X87PC_ABS  = 6",
+
     "struct BreakDefinition {",
     "  uint16_t ErrorRegister;",
     "  uint8_t Signal;",
@@ -2936,6 +2944,134 @@
         "DestSize": "OpSize::i64Bit",
         "HasSideEffects": true,
         "JITDispatch": false
+      },
+      "FPR = X87PCFromSingle FPR:$Value": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Value is a 32-bit float. Returns it as a dual value: unchanged in Precision24, converted to a 64-bit float otherwise."
+        ],
+        "DestSize": "OpSize::i64Bit",
+        "TiedSource": 0
+      },
+      "X87PCCheckLiveIns u8:$Mask, i1:$LoopSafe": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop. The first op of a block.",
+          "Precision24: for each bit i of Mask, checks that the register slot of ST(i) at the start of the block holds its",
+          "64-bit float also as a 32-bit float in bits 64-95, as X87PCStoreLiveOut leaves it, or writes it there, with zero in",
+          "bits 96-127, if the 64-bit float is an exact 32-bit float and bits 64-127 don't hold an integer from FILD m64 that",
+          "only they keep, and continues in the Precision24Wide copy of the block otherwise.",
+          "LoopSafe says that the Precision24 copy leaves all of these slots so that the check passes: TOP is the same at the",
+          "end, and each slot is either not written or written by X87PCStoreLiveOut. A jump from that copy to the start of the",
+          "same block then goes past the check.",
+          "Other copies: nothing."
+        ],
+        "HasSideEffects": true
+      },
+      "FPR = X87PCLoadLiveIn GPR:$Addr": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Loads the x87 register slot at Addr, whose value X87PCCheckLiveIns checked, as a dual value:",
+          "the 32-bit float in bits 64-95 in Precision24, the 64-bit float in bits 0-63 otherwise."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "X87PCStoreLiveOut FPR:$Value, GPR:$Addr, i1:$LoopCarried": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Stores the dual Value to the x87 register slot at Addr: as a 64-bit float in bits 0-63, and in Precision24 also",
+          "as a 32-bit float in bits 64-95 and zero in bits 96-127, otherwise zero in bits 64-127, as for a value without an",
+          "integer from FILD m64. LoopCarried says that the next block likely loads it with X87PCLoadLiveIn, which only",
+          "changes how the Precision24 copy stores it.",
+          "Bits 64-127 only hold a value that matches bits 0-63, so FISTP m64 and X87PCCheckLiveIns can check them."
+        ],
+        "HasSideEffects": true
+      },
+      "FPR = X87PCToDouble FPR:$Value": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Value is a dual value. Returns it as a 64-bit float in all copies, which is exact."
+        ],
+        "DestSize": "OpSize::i64Bit",
+        "TiedSource": 0
+      },
+      "FPR = X87PCToSingle FPR:$Value": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Value is a dual value. Returns it as a 32-bit float in all copies, rounding with the host rounding mode outside Precision24, as FST m32 does."
+        ],
+        "DestSize": "OpSize::i32Bit",
+        "TiedSource": 0
+      },
+      "FPR = X87PCBinop u8:$Op, FPR:$Src1, FPR:$Src2, u8:$SingleMask": {
+        "Desc": [
+          "Reduced precision x87 with precision control: an x87 add, subtract, multiply or divide (X87PC_ADD to X87PC_DIV) of Src1 and Src2.",
+          "The JIT emits a block with X87PC ops in up to three copies and picks one when the block is entered:",
+          "Precision53 for 53-bit and 64-bit precision, Precision24 for 24-bit precision, and Precision24Wide for 24-bit precision",
+          "when X87PCCheckLiveIns finds a live-in value that isn't held as a 32-bit float. The frontend starts a new block after",
+          "every instruction that may change the FCW.",
+          "A dual value is a 32-bit float in Precision24 and a 64-bit float in the others. The result is dual.",
+          "Bit 0 and 1 of SingleMask say that Src1 and Src2 are dual. An operand without its bit is a 64-bit float in all copies.",
+          "Precision53: the 64-bit operation. Precision24Wide: the 64-bit operation, rounded to 32 bits and converted back.",
+          "Precision24: the 32-bit operation if both operands are dual, otherwise the 64-bit operation on the operands converted to",
+          "64 bits, rounded to 32 bits. One dual operand and one 64-bit operand use X87PCBinopSpec instead. All use the host",
+          "rounding mode, which follows the x87 rounding control.",
+          "Accepted limits of both 24-bit copies (athei/wine-build#28): the x87 keeps its exponent range with 24-bit precision,",
+          "these copies have the range of 32-bit floats. A result above it becomes infinity, and a result below 2^-126 a 32-bit",
+          "subnormal, or zero if FPCR.FZ is set. FPCR.FIZ, or FPCR.FZ without FPCR.AH, also treats subnormal 32-bit operands as",
+          "zero. FPCR.FZ and FPCR.FIZ follow MXCSR.FTZ and MXCSR.DAZ, so with MXCSR.FTZ set, results that are 32-bit subnormals",
+          "become zero. Results in the normal range of 32-bit floats are the ones the x87 gives, except for rare ties when an",
+          "operand has more than 24 significant bits, as the 64-bit result is rounded twice."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "FPR = X87PCSingleCandidate FPR:$Double": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Precision24: Double converted to a 32-bit float, for X87PCBinopSpec. Other copies: nothing, the result is unused."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "GPR = X87PCSingleExact FPR:$Double, FPR:$Candidate": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Precision24: nonzero if Candidate, from X87PCSingleCandidate, converts back to the bits of Double, that is if Double is",
+          "an exact 32-bit float. Other copies: nothing, the result is unused."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "GPR = X87PCSingleSame FPR:$Double, FPR:$Earlier, GPR:$EarlierExact": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop.",
+          "Precision24: nonzero if EarlierExact is and Double has the bits of Earlier, so that the candidate of Earlier from",
+          "X87PCSingleCandidate is that of Double too. For a second load from the same address, which is still performed.",
+          "Other copies: nothing, the result is unused."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "FPR = X87PCBinopSpec u8:$Op, FPR:$Src1, FPR:$Src2, u8:$SingleMask, FPR:$Candidate, GPR:$Exact": {
+        "Desc": [
+          "Reduced precision x87 with precision control: X87PCBinop with one dual operand and one 64-bit operand, SingleMask 1 or 2.",
+          "Precision24: if Exact, the 32-bit operation with Candidate for the 64-bit operand, which gives the x87 result. Otherwise",
+          "the 64-bit operation, rounded to 32 bits, in code after the last block. Candidate and Exact come from",
+          "X87PCSingleCandidate and X87PCSingleExact for the 64-bit operand, once per block for each such operand, or from",
+          "X87PCSingleSame for a later load from the same address.",
+          "Other copies: as X87PCBinop."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "FPR = X87PCUnop u8:$Op, FPR:$Src, i1:$Single": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop: square root, sign change or absolute value (X87PC_SQRT, X87PC_NEG, X87PC_ABS).",
+          "Single says that Src is dual. The result is dual. X87PC_NEG and X87PC_ABS need a dual Src."
+        ],
+        "DestSize": "OpSize::i64Bit"
+      },
+      "X87PCCmp FPR:$Src1, FPR:$Src2, u8:$SingleMask": {
+        "Desc": [
+          "Reduced precision x87 with precision control, see X87PCBinop: FCmp of Src1 and Src2, setting NZCV.",
+          "SingleMask is as for X87PCBinop. Compares 32-bit floats in the 24-bit copy if both operands are dual, 64-bit floats otherwise."
+        ],
+        "HasSideEffects": true
       }
     },
     "F80": {

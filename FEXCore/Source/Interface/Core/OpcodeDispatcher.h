@@ -2546,6 +2546,21 @@ private:
     MMXState = MMXState_X87;
   }
 
+  // In reduced precision the JIT reads the precision control in the FCW once
+  // when it enters a block that applies it to x87 results, see X87PCBinop.
+  // Instructions that may change the FCW call this last, so the instructions
+  // after them continue in a new block, which reads it again.
+  void X87ControlWordChanged() {
+    if (!ReducedPrecisionMode) {
+      return;
+    }
+
+    auto NextBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+    Jump(NextBlock);
+    SetCurrentCodeBlock(NextBlock);
+    StartNewBlock();
+  }
+
   bool DestIsLockedMem(FEXCore::X86Tables::DecodedOp Op) const {
     return DestIsMem(Op) && (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_LOCK) != 0;
   }

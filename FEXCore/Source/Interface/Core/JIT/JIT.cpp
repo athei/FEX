@@ -881,9 +881,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   }
 
   uint32_t SSACount = IR->GetSSACount();
+  if (IR->GetHeader()->HasX87) {
+    // Blocks with X87PC ops are emitted up to three times.
+    SSACount *= 3;
+  }
   JumpTargets.clear();
   CallReturnTargets.clear();
   PendingJumpThunks.clear();
+  X87PCWideBinops.clear();
   JumpTargets.resize(IR->GetHeader()->BlockCount, {});
   Relocations.resize(PrevNumAllocations, FEXCore::CPU::Relocation::Default()); // Discard any relocations generated from a previous attempt
 
@@ -990,8 +995,68 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
       BindOrRestart(Target);
     }
 
-    for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
-      switch (IROp->Op) {
+    // Reduced precision x87, see X87PCCopy.
+    bool HasPrecisionControl = false;
+    // The Precision24Wide copy is only needed for X87PCCheckLiveIns, which
+    // is the first X87PC op if the block has it.
+    bool HasLiveInCheck = false;
+    if (IR->GetHeader()->HasX87) {
+      for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+        switch (IROp->Op) {
+        case IR::OP_X87PCCHECKLIVEINS: HasLiveInCheck = true; [[fallthrough]];
+        case IR::OP_X87PCLOADLIVEIN:
+        case IR::OP_X87PCSTORELIVEOUT:
+        case IR::OP_X87PCFROMSINGLE:
+        case IR::OP_X87PCTODOUBLE:
+        case IR::OP_X87PCTOSINGLE:
+        case IR::OP_X87PCBINOP:
+        case IR::OP_X87PCSINGLECANDIDATE:
+        case IR::OP_X87PCSINGLEEXACT:
+        case IR::OP_X87PCSINGLESAME:
+        case IR::OP_X87PCBINOPSPEC:
+        case IR::OP_X87PCUNOP:
+        case IR::OP_X87PCCMP: HasPrecisionControl = true; break;
+        default: break;
+        }
+        if (HasPrecisionControl) {
+          break;
+        }
+      }
+    }
+
+    // The check is tested with cbz, as NZCV holds guest flags. The 53-bit copy
+    // follows without a taken branch and pays three instructions.
+    ARMEmitter::ForwardLabel Precision24Code;
+    ARMEmitter::ForwardLabel Precision24WideCode;
+    ARMEmitter::ForwardLabel RepairCode;
+    ARMEmitter::BackwardLabel RepairDone;
+    X87PCWideLabel = &Precision24WideCode;
+    X87PCRepairLabel = &RepairCode;
+    X87PCRepairDoneLabel = &RepairDone;
+    X87PCRepairMask = 0;
+    // The start of each copy, and past X87PCCheckLiveIns in Precision24.
+    ARMEmitter::BiDirectionalLabel CopyStart[4];
+    X87PCAfterCheckLabel = &CopyStart[3];
+    if (HasPrecisionControl) {
+      ldrh(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.FCW));
+      and_(ARMEmitter::Size::i32Bit, TMP1, TMP1, 0x300);
+      cbz_OrRestart(ARMEmitter::Size::i32Bit, TMP1, &Precision24Code);
+      X87PCBlockID = BlockIROp->ID;
+    }
+
+    EmitX87PCCopy = X87PCCopy::Precision53;
+    while (true) {
+      if (HasPrecisionControl) {
+        // The Precision24Wide copy jumps back to itself too. A live-in that
+        // sent it there is often a loop invariant that stays double, like a
+        // matrix element kept on the stack, and would fail the check again.
+        auto Start = &CopyStart[static_cast<int>(EmitX87PCCopy)];
+        BindOrRestart(Start);
+        X87PCCopyStart = Start;
+      }
+
+      for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {
+        switch (IROp->Op) {
 #define REGISTER_OP(op, x) \
   case FEXCore::IR::IROps::OP_##op: Op_##x(IROp, CodeNode); break
 
@@ -999,8 +1064,50 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 #include <FEXCore/IR/IRDefines_Dispatch.inc>
 #undef REGISTER_OP
 
-      default: Op_Unhandled(IROp, CodeNode); break;
+        default: Op_Unhandled(IROp, CodeNode); break;
+        }
       }
+
+      if (!HasPrecisionControl || EmitX87PCCopy == X87PCCopy::Precision24Wide || (EmitX87PCCopy == X87PCCopy::Precision24 && !HasLiveInCheck)) {
+        break;
+      }
+
+      // Another copy follows, so the branches that this one left pending
+      // can't fall through.
+      if (PendingTargetLabel) {
+        if (PendingTargetLabel->Backward.Location) {
+          EmitSuspendInterruptCheck();
+        }
+        b_OrRestart(PendingTargetLabel);
+        PendingTargetLabel = nullptr;
+      }
+      if (PendingCallReturnTargetLabel) {
+        b_OrRestart(PendingCallReturnTargetLabel);
+        PendingCallReturnTargetLabel = nullptr;
+      }
+
+      if (EmitX87PCCopy == X87PCCopy::Precision53) {
+        BindOrRestart(&Precision24Code);
+        EmitX87PCCopy = X87PCCopy::Precision24;
+      } else {
+        if (X87PCRepairMask) {
+          EmitX87PCRepair();
+        }
+        // Entered from X87PCCheckLiveIns in the Precision24 copy.
+        BindOrRestart(&Precision24WideCode);
+        EmitX87PCCopy = X87PCCopy::Precision24Wide;
+      }
+    }
+    EmitX87PCCopy = X87PCCopy::Precision53;
+    if (HasPrecisionControl) {
+      // The labels are local to this block. A pending jump to one of them
+      // can't fall through to the next block anyway.
+      if (PendingTargetLabel >= &CopyStart[0] && PendingTargetLabel <= &CopyStart[3]) {
+        EmitSuspendInterruptCheck();
+        b_OrRestart(PendingTargetLabel);
+        PendingTargetLabel = nullptr;
+      }
+      X87PCCopyStart = nullptr;
     }
 
     DebugData->Subblocks.push_back({static_cast<uint32_t>(BlockStartHostCode - CodeData.BlockBegin),
@@ -1015,6 +1122,9 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
     b_OrRestart(PendingTargetLabel);
   }
   PendingTargetLabel = nullptr;
+
+  // Out of the way of the blocks, as they are rarely taken.
+  EmitX87PCWideBinops();
 
   ARMEmitter::ForwardLabel l_ExitLink;
   for (auto& PendingJumpThunk : PendingJumpThunks) {

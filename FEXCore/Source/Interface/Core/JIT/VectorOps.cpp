@@ -5111,5 +5111,390 @@ DEF_OP(F64F2XM1) {
   fmov(Dst.D(), VTMP1.D());
 }
 
+// The X87PC ops: CompileCode emits a block that has them once for each
+// X87PCCopy. A dual value is a 32-bit float in the Precision24 copy and a
+// 64-bit float in the others.
+
+DEF_OP(X87PCFromSingle) {
+  const auto Op = IROp->C<IR::IROp_X87PCFromSingle>();
+  const auto Src = GetVReg(Op->Value);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    fcvt(Dst.D(), Src.S());
+  } else if (Dst != Src) {
+    fmov(Dst.S(), Src.S());
+  }
+}
+
+DEF_OP(X87PCCheckLiveIns) {
+  const auto Op = IROp->C<IR::IROp_X87PCCheckLiveIns>();
+  if (EmitX87PCCopy != X87PCCopy::Precision24 || Op->Mask == 0) {
+    return;
+  }
+
+  // For each ST(i) in Mask: the 32-bit float in bits 64-95 of the register
+  // slot, converted to 64 bits, must have the bits of the 64-bit float in
+  // bits 0-63, which is the case after X87PCStoreLiveOut. OR the
+  // differences, and leave the rest to EmitX87PCRepair. Bits are compared,
+  // not values, so that -0.0 is kept and NaNs whose payload doesn't fit take
+  // the other copy. TOP is read again for each, as all four temporaries are
+  // in use.
+  constexpr auto MMOffset = offsetof(FEXCore::Core::CpuStateFrame, State.mm[0][0]);
+  bool First = true;
+  for (uint32_t i = 0; i < 8; i++) {
+    if (!(Op->Mask & (1U << i))) {
+      continue;
+    }
+    ldrb(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.flags) + X86State::X87FLAG_TOP_LOC);
+    add(ARMEmitter::Size::i32Bit, TMP2, TMP2, i);
+    and_(ARMEmitter::Size::i32Bit, TMP2, TMP2, 7);
+    add(ARMEmitter::Size::i64Bit, TMP2, STATE, TMP2, ARMEmitter::ShiftType::LSL, 4);
+    ldr(TMP3, TMP2, MMOffset);
+    ldr(VTMP1.S(), TMP2, MMOffset + 8);
+    fcvt(VTMP1.D(), VTMP1.S());
+    fmov(ARMEmitter::Size::i64Bit, TMP4, VTMP1.D());
+    if (First) {
+      eor(ARMEmitter::Size::i64Bit, TMP1, TMP4, TMP3);
+      First = false;
+    } else {
+      eor(ARMEmitter::Size::i64Bit, TMP4, TMP4, TMP3);
+      orr(ARMEmitter::Size::i64Bit, TMP1, TMP1, TMP4);
+    }
+  }
+  X87PCRepairMask = Op->Mask;
+  cbnz_OrRestart(ARMEmitter::Size::i64Bit, TMP1, X87PCRepairLabel);
+  BindOrRestart(X87PCRepairDoneLabel);
+
+  if (Op->LoopSafe) {
+    // A pass through this copy leaves the slots so that the check passes, so
+    // the block jumping to itself can skip it.
+    BindOrRestart(X87PCAfterCheckLabel);
+    X87PCCopyStart = X87PCAfterCheckLabel;
+  }
+}
+
+void Arm64JITCore::EmitX87PCRepair() {
+  // For each ST(i) whose bits 64-95 don't hold its value as a 32-bit float:
+  // if the 64-bit float is an exact 32-bit float, as after a block without
+  // X87PC ops, write that there and zero to bits 96-127, otherwise take the
+  // Precision24Wide copy. Bits 64-127 may hold the integer from FILD m64
+  // that the 64-bit float was rounded from, see TopIntCache, which FISTP m64
+  // stores if the float still converts to it. An exact 32-bit float can be
+  // such a rounded integer, like 2^56 for 2^56 + 5, so the Precision24Wide
+  // copy, which leaves bits 64-127 alone, is taken as well if the integer
+  // converts to the float but the float doesn't convert back to it.
+  constexpr auto MMOffset = offsetof(FEXCore::Core::CpuStateFrame, State.mm[0][0]);
+  BindOrRestart(X87PCRepairLabel);
+  for (uint32_t i = 0; i < 8; i++) {
+    if (!(X87PCRepairMask & (1U << i))) {
+      continue;
+    }
+    ARMEmitter::ForwardLabel Checked;
+    ARMEmitter::ForwardLabel Write;
+    ldrb(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.flags) + X86State::X87FLAG_TOP_LOC);
+    add(ARMEmitter::Size::i32Bit, TMP2, TMP1, i);
+    and_(ARMEmitter::Size::i32Bit, TMP2, TMP2, 7);
+    add(ARMEmitter::Size::i64Bit, TMP2, STATE, TMP2, ARMEmitter::ShiftType::LSL, 4);
+    ldr(TMP3, TMP2, MMOffset);
+    ldr(VTMP1.S(), TMP2, MMOffset + 8);
+    fcvt(VTMP1.D(), VTMP1.S());
+    fmov(ARMEmitter::Size::i64Bit, TMP4, VTMP1.D());
+    eor(ARMEmitter::Size::i64Bit, TMP4, TMP4, TMP3);
+    (void)cbz(ARMEmitter::Size::i64Bit, TMP4, &Checked);
+    fmov(ARMEmitter::Size::i64Bit, VTMP1.D(), TMP3);
+    fcvt(VTMP2.S(), VTMP1.D());
+    fcvt(VTMP1.D(), VTMP2.S());
+    fmov(ARMEmitter::Size::i64Bit, TMP4, VTMP1.D());
+    eor(ARMEmitter::Size::i64Bit, TMP4, TMP4, TMP3);
+    cbnz_OrRestart(ARMEmitter::Size::i64Bit, TMP4, X87PCWideLabel);
+    // The FISTP m64 condition: the integer converts to the float.
+    ldr(TMP4, TMP2, MMOffset + 8);
+    scvtf(ARMEmitter::Size::i64Bit, VTMP1.D(), TMP4);
+    fmov(ARMEmitter::Size::i64Bit, TMP1, VTMP1.D());
+    eor(ARMEmitter::Size::i64Bit, TMP1, TMP1, TMP3);
+    (void)cbnz(ARMEmitter::Size::i64Bit, TMP1, &Write);
+    // And the float doesn't give the integer back, so it is needed.
+    fmov(ARMEmitter::Size::i64Bit, VTMP1.D(), TMP3);
+    fcvtzs(ARMEmitter::Size::i64Bit, TMP1, VTMP1.D());
+    eor(ARMEmitter::Size::i64Bit, TMP1, TMP1, TMP4);
+    cbnz_OrRestart(ARMEmitter::Size::i64Bit, TMP1, X87PCWideLabel);
+    (void)Bind(&Write);
+    str(VTMP2.S(), TMP2, MMOffset + 8);
+    str(ARMEmitter::WReg::zr, TMP2, MMOffset + 12);
+    (void)Bind(&Checked);
+  }
+  b_OrRestart(X87PCRepairDoneLabel);
+}
+
+DEF_OP(X87PCLoadLiveIn) {
+  const auto Op = IROp->C<IR::IROp_X87PCLoadLiveIn>();
+  const auto Addr = GetReg(Op->Addr);
+  const auto Dst = GetVReg(Node);
+  constexpr auto MMOffset = offsetof(FEXCore::Core::CPUState, mm[0][0]);
+
+  if (EmitX87PCCopy == X87PCCopy::Precision24) {
+    // X87PCCheckLiveIns has checked that this is the value.
+    ldr(Dst.S(), Addr, MMOffset + 8);
+  } else {
+    ldr(Dst.D(), Addr, MMOffset);
+  }
+}
+
+DEF_OP(X87PCStoreLiveOut) {
+  const auto Op = IROp->C<IR::IROp_X87PCStoreLiveOut>();
+  const auto Value = GetVReg(Op->Value);
+  const auto Addr = GetReg(Op->Addr);
+  constexpr auto MMOffset = offsetof(FEXCore::Core::CPUState, mm[0][0]);
+
+  if (EmitX87PCCopy == X87PCCopy::Precision24) {
+    // A vector conversion, see X87PCBinop.
+    fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP1, Value);
+    str(VTMP1.D(), Addr, MMOffset);
+    // The 32-bit float and zero. For a value that a loop carries, a vector
+    // store of the float as it is keeps the next X87PCLoadLiveIn of it as
+    // fast as store forwarding allows. Otherwise an integer store, as the
+    // other copies make there, which doesn't add to the vector stores.
+    if (Op->LoopCarried) {
+      movi(ARMEmitter::SubRegSize::i64Bit, VTMP2.Q(), 0);
+      add(ARMEmitter::Size::i64Bit, TMP1, Addr, MMOffset + 8);
+      stp<ARMEmitter::IndexType::OFFSET>(Value.S(), VTMP2.S(), TMP1, 0);
+    } else {
+      fmov(ARMEmitter::Size::i32Bit, TMP1, Value.S());
+      str(TMP1, Addr, MMOffset + 8);
+    }
+  } else {
+    // What FlushCachedRegs stores for a value without an integer.
+    str(Value.D(), Addr, MMOffset);
+    str(ARMEmitter::XReg::zr, Addr, MMOffset + 8);
+  }
+}
+
+DEF_OP(X87PCToDouble) {
+  const auto Op = IROp->C<IR::IROp_X87PCToDouble>();
+  const auto Src = GetVReg(Op->Value);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy == X87PCCopy::Precision24) {
+    fcvt(Dst.D(), Src.S());
+  } else if (Dst != Src) {
+    fmov(Dst.D(), Src.D());
+  }
+}
+
+DEF_OP(X87PCToSingle) {
+  const auto Op = IROp->C<IR::IROp_X87PCToSingle>();
+  const auto Src = GetVReg(Op->Value);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    fcvt(Dst.S(), Src.D());
+  } else if (Dst != Src) {
+    fmov(Dst.S(), Src.S());
+  }
+}
+
+void Arm64JITCore::EmitX87PCBinop(uint8_t Op, ARMEmitter::ScalarRegSize Size, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1,
+                                  ARMEmitter::VRegister Src2) {
+  switch (Op) {
+  case IR::X87PC_ADD: fadd(Size, Dst, Src1, Src2); break;
+  case IR::X87PC_SUB: fsub(Size, Dst, Src1, Src2); break;
+  case IR::X87PC_MUL: fmul(Size, Dst, Src1, Src2); break;
+  case IR::X87PC_DIV: fdiv(Size, Dst, Src1, Src2); break;
+  default: LOGMAN_MSG_A_FMT("Unknown X87PCBinop {}", Op); FEX_UNREACHABLE;
+  }
+}
+
+DEF_OP(X87PCBinop) {
+  const auto Op = IROp->C<IR::IROp_X87PCBinop>();
+  auto Src1 = GetVReg(Op->Src1);
+  auto Src2 = GetVReg(Op->Src2);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    // The same instruction as VFAdd, VFSub, VFMul and VFDiv for 64-bit scalars.
+    EmitX87PCBinop(Op->Op, ARMEmitter::ScalarRegSize::i64Bit, Dst, Src1, Src2);
+    if (EmitX87PCCopy == X87PCCopy::Precision24Wide) {
+      fcvt(Dst.S(), Dst.D());
+      fcvt(Dst.D(), Dst.S());
+    }
+    return;
+  }
+
+  if (Op->SingleMask == 3) {
+    // Both operands are 32-bit floats, so the 32-bit operation rounds the
+    // exact result once, to 24 bits, as the x87 does.
+    EmitX87PCBinop(Op->Op, ARMEmitter::ScalarRegSize::i32Bit, Dst, Src1, Src2);
+    return;
+  }
+
+  // An operand may have more than 24 bits, see EmitX87PCWideBinop.
+  // X87PCBinopSpec handles a single such operand faster.
+  EmitX87PCWideBinop(Op->Op, Op->SingleMask, Dst, Src1, Src2);
+}
+
+DEF_OP(X87PCSingleCandidate) {
+  const auto Op = IROp->C<IR::IROp_X87PCSingleCandidate>();
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    return;
+  }
+  // The vector form, which writes the whole register: with FPCR.NEP set,
+  // the scalar one merges into the destination and depends on its previous
+  // value. The upper lane is unused.
+  fcvtn(ARMEmitter::SubRegSize::i32Bit, GetVReg(Node), GetVReg(Op->Double));
+}
+
+DEF_OP(X87PCSingleExact) {
+  const auto Op = IROp->C<IR::IROp_X87PCSingleExact>();
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    return;
+  }
+  // Converts back and compares the bits, as the repair path of
+  // X87PCCheckLiveIns does. Vector forms, see X87PCSingleCandidate.
+  const auto Double = GetVReg(Op->Double);
+  fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP1, GetVReg(Op->Candidate));
+  cmeq(ARMEmitter::SubRegSize::i64Bit, VTMP1.Q(), VTMP1.Q(), Double.Q());
+  fmov(ARMEmitter::Size::i64Bit, GetReg(Node), VTMP1.D());
+}
+
+DEF_OP(X87PCSingleSame) {
+  const auto Op = IROp->C<IR::IROp_X87PCSingleSame>();
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    return;
+  }
+  // Bits, as in X87PCSingleExact. The upper lanes are unused.
+  cmeq(ARMEmitter::SubRegSize::i64Bit, VTMP1.Q(), GetVReg(Op->Double).Q(), GetVReg(Op->Earlier).Q());
+  fmov(ARMEmitter::Size::i64Bit, TMP1, VTMP1.D());
+  and_(ARMEmitter::Size::i64Bit, GetReg(Node), TMP1, GetReg(Op->EarlierExact));
+}
+
+DEF_OP(X87PCBinopSpec) {
+  const auto Op = IROp->C<IR::IROp_X87PCBinopSpec>();
+  const auto Src1 = GetVReg(Op->Src1);
+  const auto Src2 = GetVReg(Op->Src2);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    EmitX87PCBinop(Op->Op, ARMEmitter::ScalarRegSize::i64Bit, Dst, Src1, Src2);
+    if (EmitX87PCCopy == X87PCCopy::Precision24Wide) {
+      fcvt(Dst.S(), Dst.D());
+      fcvt(Dst.D(), Dst.S());
+    }
+    return;
+  }
+
+  // The 64-bit operand is often a constant like 0.5 that is an exact 32-bit
+  // float, and then the 32-bit operation gives the x87 result. Exact only
+  // depends on that operand, so the branch is off the path of the dual one,
+  // and predicted. Otherwise the code after the last block computes the
+  // result in 64 bits and comes back.
+  auto& Wide = X87PCWideBinops.emplace_back(X87PCWideBinop {
+    .Op = Op->Op,
+    .SingleMask = Op->SingleMask,
+    .Dst = Dst,
+    .Src1 = Src1,
+    .Src2 = Src2,
+  });
+  cbz_OrRestart(ARMEmitter::Size::i64Bit, GetReg(Op->Exact), &Wide.Entry);
+  const auto Candidate = GetVReg(Op->Candidate);
+  if (Op->SingleMask == 2) {
+    EmitX87PCBinop(Op->Op, ARMEmitter::ScalarRegSize::i32Bit, Dst, Candidate, Src2);
+  } else {
+    EmitX87PCBinop(Op->Op, ARMEmitter::ScalarRegSize::i32Bit, Dst, Src1, Candidate);
+  }
+  BindOrRestart(&Wide.Return);
+}
+
+void Arm64JITCore::EmitX87PCWideBinops() {
+  for (auto& Wide : X87PCWideBinops) {
+    BindOrRestart(&Wide.Entry);
+    EmitX87PCWideBinop(Wide.Op, Wide.SingleMask, Wide.Dst, Wide.Src1, Wide.Src2);
+    b_OrRestart(&Wide.Return);
+  }
+  X87PCWideBinops.clear();
+}
+
+void Arm64JITCore::EmitX87PCWideBinop(uint8_t Op, uint8_t SingleMask, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1,
+                                      ARMEmitter::VRegister Src2) {
+  // A 64-bit operand may have more than 24 bits. Converting it to 32 bits
+  // first would round it, so widen a 32-bit one, which is exact, and round
+  // the 64-bit result. Vector conversions, and the result in Dst rather than
+  // a temporary: with FPCR.NEP set, scalar ones merge into their destination,
+  // which would chain every such operation in the block to the previous one.
+  if (SingleMask & 1) {
+    fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP1, Src1);
+    Src1 = VTMP1;
+  }
+  if (SingleMask & 2) {
+    fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP2, Src2);
+    Src2 = VTMP2;
+  }
+  EmitX87PCBinop(Op, ARMEmitter::ScalarRegSize::i64Bit, Dst, Src1, Src2);
+  fcvt(Dst.S(), Dst.D());
+}
+
+DEF_OP(X87PCUnop) {
+  const auto Op = IROp->C<IR::IROp_X87PCUnop>();
+  const auto Src = GetVReg(Op->Src);
+  const auto Dst = GetVReg(Node);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    // The same instructions as VFSqrt, VFNeg and VFAbs for 64-bit scalars.
+    switch (Op->Op) {
+    case IR::X87PC_SQRT:
+      fsqrt(Dst.D(), Src.D());
+      if (EmitX87PCCopy == X87PCCopy::Precision24Wide) {
+        fcvt(Dst.S(), Dst.D());
+        fcvt(Dst.D(), Dst.S());
+      }
+      break;
+    case IR::X87PC_NEG: fneg(ARMEmitter::SubRegSize::i64Bit, Dst.Q(), Src.Q()); break;
+    case IR::X87PC_ABS: fabs(Dst.D(), Src.D()); break;
+    default: LOGMAN_MSG_A_FMT("Unknown X87PCUnop {}", Op->Op); FEX_UNREACHABLE;
+    }
+    return;
+  }
+
+  if (Op->Single) {
+    switch (Op->Op) {
+    case IR::X87PC_SQRT: fsqrt(Dst.S(), Src.S()); break;
+    case IR::X87PC_NEG: fneg(Dst.S(), Src.S()); break;
+    case IR::X87PC_ABS: fabs(Dst.S(), Src.S()); break;
+    default: LOGMAN_MSG_A_FMT("Unknown X87PCUnop {}", Op->Op); FEX_UNREACHABLE;
+    }
+    return;
+  }
+
+  LOGMAN_THROW_A_FMT(Op->Op == IR::X87PC_SQRT, "X87PCUnop {} needs a dual source", Op->Op);
+  fsqrt(Dst.D(), Src.D());
+  fcvt(Dst.S(), Dst.D());
+}
+
+DEF_OP(X87PCCmp) {
+  const auto Op = IROp->C<IR::IROp_X87PCCmp>();
+  auto Src1 = GetVReg(Op->Src1);
+  auto Src2 = GetVReg(Op->Src2);
+
+  if (EmitX87PCCopy != X87PCCopy::Precision24) {
+    fcmp(ARMEmitter::ScalarRegSize::i64Bit, Src1, Src2);
+    return;
+  }
+
+  if (Op->SingleMask == 3) {
+    fcmp(ARMEmitter::ScalarRegSize::i32Bit, Src1, Src2);
+    return;
+  }
+
+  // Vector conversions, see X87PCBinop.
+  if (Op->SingleMask & 1) {
+    fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP1, Src1);
+    Src1 = VTMP1;
+  }
+  if (Op->SingleMask & 2) {
+    fcvtl(ARMEmitter::SubRegSize::i64Bit, VTMP2, Src2);
+    Src2 = VTMP2;
+  }
+  fcmp(ARMEmitter::ScalarRegSize::i64Bit, Src1, Src2);
+}
 
 } // namespace FEXCore::CPU

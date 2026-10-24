@@ -3178,6 +3178,8 @@ void OpDispatchBuilder::FXRStoreOp(OpcodeArgs) {
 
   Ref MXCSR = _LoadMemGPR(OpSize::i32Bit, Mem, Constant(24), OpSize::i32Bit, MemOffsetType::SXTX, 1);
   RestoreMXCSRState(MXCSR);
+
+  X87ControlWordChanged();
 }
 
 void OpDispatchBuilder::XRstorOpImpl(OpcodeArgs) {
@@ -3217,7 +3219,7 @@ void OpDispatchBuilder::XRstorOpImpl(OpcodeArgs) {
     StartNewBlock();
   };
 
-  // x87
+  // x87. The blocks this creates also serve as X87ControlWordChanged.
   {
     RestoreIfFlagSetOrDefault(0, [this, Op] { RestoreX87State(XSaveBase(Op)); }, [this, Op] { DefaultX87State(Op); });
   }

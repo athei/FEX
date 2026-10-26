@@ -1388,7 +1388,8 @@ void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
 
 void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status) {
   auto* ThreadState = GetCPUArea().ThreadState();
-  if (!InvalidationTracker || !ThreadState) {
+  // A read into a NULL buffer or of no bytes writes no memory
+  if (!InvalidationTracker || !ThreadState || !Address || !Size) {
     return;
   }
 
@@ -1431,7 +1432,8 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
     return;
   }
 
-  if (After && Status == STATUS_SUCCESS) {
+  if (After && Status == STATUS_SUCCESS &&
+      InvalidationTracker->OverlapsExecutableInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
     std::scoped_lock Lock(ThreadCreationMutex);
     InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
   }

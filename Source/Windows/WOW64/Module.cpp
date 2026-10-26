@@ -1412,13 +1412,18 @@ void BTCpuNotifyUnmapViewOfSection(void* Address, BOOL After, ULONG Status) {
 
 void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status) {
   auto* ThreadState = GetTLS().ThreadState();
-  if (!InvalidationTracker || !ThreadState) {
+  // A read into a NULL buffer or of no bytes writes no memory
+  if (!InvalidationTracker || !ThreadState || !Address || !Size) {
     return;
   }
 
   // See arm64ec `BTCpu64NotifyReadFile` for why this like this.
   if (After && Status == STATUS_SUCCESS) {
+    // The check takes IntervalsLock, a FEX lock, see EnterSyscallCallback
     ScopedSyscallCallback Callback;
+    if (!InvalidationTracker->OverlapsExecutableInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
+      return;
+    }
     std::scoped_lock Lock(ThreadCreationMutex);
     InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
   }

@@ -203,13 +203,14 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
     SectionSize += Info.RegionSize;
   }
 
-  InvalidateIntervalInternal(SectionBase, SectionSize);
-
+  // Removed before invalidating, so no code compiled from the range outlives it
   if (Free) {
     std::unique_lock Lock(IntervalsLock);
     XIntervals.Remove({SectionBase, SectionBase + SectionSize});
     RWXIntervals.Remove({SectionBase, SectionBase + SectionSize});
   }
+
+  InvalidateIntervalInternal(SectionBase, SectionSize);
 
   return {SectionBase, SectionSize};
 }
@@ -223,13 +224,22 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
   const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
   const auto AlignedSize = std::max(Size, (Address - AlignedBase + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK);
 
-  InvalidateIntervalInternal(AlignedBase, AlignedSize);
-
+  // Removed before invalidating, so no code compiled from the range outlives it
   if (Free) {
     std::unique_lock Lock(IntervalsLock);
     XIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
     RWXIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
   }
+
+  InvalidateIntervalInternal(AlignedBase, AlignedSize);
+}
+
+bool InvalidationTracker::OverlapsExecutableInterval(uint64_t Address, uint64_t Size) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+
+  std::shared_lock Lock(IntervalsLock);
+  return XIntervals.Intersect({AlignedBase, AlignedEnd});
 }
 
 void InvalidationTracker::ReprotectRWXIntervals(uint64_t Address, uint64_t Size) {

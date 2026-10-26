@@ -34,6 +34,9 @@ public:
   };
   InvalidateContainingSectionResult InvalidateContainingSection(uint64_t Address, bool Free);
   void InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free);
+  // Code is only compiled from executable intervals and is invalidated when its interval stops being executable, so a
+  // write to memory this returns false for can't affect any code.
+  bool OverlapsExecutableInterval(uint64_t Address, uint64_t Size);
   void ReprotectRWXIntervals(uint64_t Address, uint64_t Size);
   bool HandleRWXAccessViolation(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, uint64_t FaultAddress);
 

@@ -897,6 +897,9 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
   Relocations.resize(PrevNumAllocations, FEXCore::CPU::Relocation::Default()); // Discard any relocations generated from a previous attempt
 
   CodeData.EntryPoints.clear();
+  // A restart can move the host code, so the offsets of a previous attempt are stale.
+  DebugData->Subblocks.clear();
+  DebugData->GuestOpcodes.clear();
 
   // Fairly excessive buffer range to make sure we don't overflow
   // One page baseline, plus SSANodeMultipler bytes, plus another page for guard page.

@@ -33,6 +33,9 @@ public:
     uint64_t SectionSize;
   };
   InvalidateContainingSectionResult InvalidateContainingSection(uint64_t Address, bool Free);
+  // Called after the syscall of every unmap of this process, with ThreadCreationMutex held since the call of
+  // InvalidateContainingSection before it. Ends the range that call kept out of the intervals, if it found a section.
+  void FinishSectionUnmap();
   void InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free);
   // Code is only compiled from executable intervals and is invalidated when its interval stops being executable, so a
   // write to memory this returns false for can't affect any code.
@@ -49,6 +52,11 @@ public:
   FEXCore::HLE::ExecutableRangeInfo QueryExecutableRange(uint64_t Address);
 
 private:
+  // NOTE: These assume IntervalsLock is held: for writing, by the first two.
+  void AddExecutableInterval(FEXCore::IntervalList<uint64_t>::Interval ProtInterval, ULONG Prot);
+  bool TrackExecutableMapping(uint64_t Address);
+  FEXCore::HLE::ExecutableRangeInfo QueryExecutableRangeLocked(uint64_t Address);
+
   void DetectMonoBackpatcherBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC);
   void DisableSMCDetection();
   void InvalidateIntervalInternal(uint64_t Address, uint64_t Size);
@@ -75,6 +83,10 @@ private:
   FEXCore::IntervalList<uint64_t> DEPPromotedIntervals; // Protected by IntervalsLock
   // Page aligned [begin, end) of each untracked write in progress, protected by IntervalsLock
   fextl::vector<std::pair<uint64_t, uint64_t>> UntrackedWrites;
+  // [begin, end) of the section between its InvalidateContainingSection and FinishSectionUnmap, and whether a compile
+  // asked about it meanwhile, protected by IntervalsLock
+  std::pair<uint64_t, uint64_t> UnmappingSection {};
+  bool UnmappingSectionMissed {false};
 
   bool MonoBackpatcherDetectionPending {false};
   uint64_t MonoBase {0};

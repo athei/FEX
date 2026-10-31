@@ -841,7 +841,18 @@ bool OpDispatchBuilder::X87StateUnseenUntilBlockEnd() const {
 // or fldenv.
 void OpDispatchBuilder::X87FNSTSW(OpcodeArgs, bool DestRAX) {
   Ref TopValue = DestRAX && X87StateUnseenUntilBlockEnd() ? _ReadStackTop() : _SyncStackToSlow();
-  Ref StatusWord = ReconstructFSW_Helper(TopValue);
+  Ref StatusWord {};
+  if (Op->PC == X87CompareNextPC) {
+    // The compare in front of this has the C flags in registers, and has cleared C1.
+    StatusWord = _Lshl(OpSize::i64Bit, TopValue, Constant(11));
+    StatusWord = _Orlshl(OpSize::i64Bit, StatusWord, X87CompareC0, 8);
+    StatusWord = _Orlshl(OpSize::i64Bit, StatusWord, X87CompareC2, 10);
+    StatusWord = _Orlshl(OpSize::i64Bit, StatusWord, X87CompareC3, 14);
+    StatusWord = _Or(OpSize::i64Bit, StatusWord, GetRFLAG(FEXCore::X86State::X87FLAG_IE_LOC));
+  } else {
+    StatusWord = ReconstructFSW_Helper(TopValue);
+  }
+
   if (DestRAX) {
     StoreGPRRegister(X86State::REG_RAX, StatusWord, OpSize::i16Bit);
   } else {

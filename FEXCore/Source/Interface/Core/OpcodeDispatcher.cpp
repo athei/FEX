@@ -745,6 +745,14 @@ void OpDispatchBuilder::CondJUMPOp(OpcodeArgs) {
     auto Cond = DecodeNZCVCondition(OP);
     if (Cond) {
       CondJump_ = CondJumpNZCV(*Cond);
+    } else if (Op->PC == X87TestNextPC) {
+      // Only the two bits of the mask can be set in the value PF is taken from, so its parity is their XOR. This reads
+      // PF like any other PF branch, which keeps its store for a fault in the block after this one.
+      LOGMAN_THROW_A_FMT(OP == 0xA || OP == 0xB, "only PF left");
+      const auto Low = std::countr_zero(X87TestMask);
+      const auto High = std::bit_width(X87TestMask) - 1;
+      Ref PF = GetRFLAG(FEXCore::X86State::RFLAG_PF_RAW_LOC);
+      CondJump_ = CondJumpBit(_XorShift(OpSize::i32Bit, PF, PF, ShiftType::LSR, High - Low), Low, OP == 0xB);
     } else {
       LOGMAN_THROW_A_FMT(OP == 0xA || OP == 0xB, "only PF left");
       CondJump_ = CondJumpBit(LoadPFRaw(false, false), 0, OP == 0xB);
@@ -1071,6 +1079,11 @@ void OpDispatchBuilder::TESTOp(OpcodeArgs, uint32_t SrcIndex, bool DestRAX) {
     auto Res = _And(OpSize::i32Bit, Dest, Src);
     CalculatePF(Res);
     SetNZ_ZeroCV(OpSize::i32Bit, Res);
+
+    if (Op->PC == X87StatusNextPC && Size == OpSize::i8Bit && std::popcount(Const) == 2) {
+      X87TestNextPC = Op->PC + Op->InstSize;
+      X87TestMask = Const;
+    }
   } else {
     HandleNZ00Write();
     CalculatePF(_AndWithFlags(Size, Dest, Src));

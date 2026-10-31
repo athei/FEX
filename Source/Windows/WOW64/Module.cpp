@@ -1408,6 +1408,7 @@ void BTCpuNotifyUnmapViewOfSection(void* Address, BOOL After, ULONG Status) {
       HandleImageUnmap(Start, Size);
     }
   } else {
+    InvalidationTracker->FinishSectionUnmap();
     ThreadCreationMutex.unlock();
     if (Data) {
       LeaveSyscallCallback(std::exchange(Data->NotifyEnteredSyscallCallback, false));

@@ -45,6 +45,24 @@ static bool ProtIsWritable(ULONG Prot) {
   return (Prot & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
 }
 
+void InvalidationTracker::AddExecutableInterval(FEXCore::IntervalList<uint64_t>::Interval ProtInterval, ULONG Prot) {
+  XIntervals.Insert(ProtInterval);
+  // A range made executable and read-only stays in RWXIntervals, so a write to it is still taken for SMC and made
+  // writable. While FEX traps writes to a range, VirtualProtect and VirtualQuery report PAGE_EXECUTE_READ for it, so
+  // a guest that saved that protection and restores it after patching still expects the range to be writable.
+  if (ProtIsWritable(Prot)) {
+    LogMan::Msg::DFmt("Add SMC interval: {:X} - {:X}", ProtInterval.Offset, ProtInterval.End);
+    RWXIntervals.Insert(ProtInterval);
+  }
+  if (DEPDisabled) {
+    if (ProtHasExec(Prot)) {
+      DEPPromotedIntervals.Remove(ProtInterval);
+    } else {
+      DEPPromotedIntervals.Insert(ProtInterval);
+    }
+  }
+}
+
 void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot) {
   const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
   const auto AlignedSize = (Address - AlignedBase + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
@@ -54,26 +72,10 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
 
     FEXCore::IntervalList<uint64_t>::Interval ProtInterval {AlignedBase, AlignedBase + AlignedSize};
 
-    const bool HasExec = ProtHasExec(Prot);
-    const bool EffectiveExec = HasExec || (DEPDisabled && ProtIsReadable(Prot));
-    const bool EffectiveRWX = EffectiveExec && ProtIsWritable(Prot);
+    const bool EffectiveExec = ProtHasExec(Prot) || (DEPDisabled && ProtIsReadable(Prot));
 
     if (EffectiveExec) {
-      XIntervals.Insert(ProtInterval);
-      // A range made executable and read-only stays in RWXIntervals, so a write to it is still taken for SMC and made
-      // writable. While FEX traps writes to a range, VirtualProtect and VirtualQuery report PAGE_EXECUTE_READ for it, so
-      // a guest that saved that protection and restores it after patching still expects the range to be writable.
-      if (EffectiveRWX) {
-        LogMan::Msg::DFmt("Add SMC interval: {:X} - {:X}", AlignedBase, AlignedBase + AlignedSize);
-        RWXIntervals.Insert(ProtInterval);
-      }
-      if (DEPDisabled) {
-        if (HasExec) {
-          DEPPromotedIntervals.Remove(ProtInterval);
-        } else {
-          DEPPromotedIntervals.Insert(ProtInterval);
-        }
-      }
+      AddExecutableInterval(ProtInterval, Prot);
       return true;
     } else if (XIntervals.Intersect(ProtInterval)) {
       XIntervals.Remove(ProtInterval);
@@ -208,11 +210,24 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
     std::unique_lock Lock(IntervalsLock);
     XIntervals.Remove({SectionBase, SectionBase + SectionSize});
     RWXIntervals.Remove({SectionBase, SectionBase + SectionSize});
+    UnmappingSection = {SectionBase, SectionBase + SectionSize};
   }
 
   InvalidateIntervalInternal(SectionBase, SectionSize);
 
   return {SectionBase, SectionSize};
+}
+
+void InvalidationTracker::FinishSectionUnmap() {
+  const auto [Section, Missed] = [&] {
+    std::unique_lock Lock(IntervalsLock);
+    return std::pair {std::exchange(UnmappingSection, {}), std::exchange(UnmappingSectionMissed, false)};
+  }();
+
+  // What a compile made of the section while it was going away, see TrackExecutableMapping
+  if (Missed) {
+    InvalidateIntervalInternal(Section.first, Section.second - Section.first);
+  }
 }
 
 void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free) {
@@ -263,10 +278,17 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
       InvalidateIntervalInternalLocked(FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
 
       // Invalidate, then unprotect the faulting page with the compilation lock held to ensure that any racing invalidations are not dropped.
-      ULONG TmpProt;
-      void* TmpAddress = reinterpret_cast<void*>(FaultAddress);
-      SIZE_T TmpSize = 1;
-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, UntrapProt, &TmpProt);
+      const auto Untrap = [FaultAddress](ULONG Prot) {
+        ULONG TmpProt;
+        void* TmpAddress = reinterpret_cast<void*>(FaultAddress);
+        SIZE_T TmpSize = 1;
+        return NT_SUCCESS(NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, Prot, &TmpProt));
+      };
+      // Wine refuses the writable protections on a copy-on-write view of a section. A write that can't go through
+      // either way is the guest's access violation, not one to retry.
+      if (!Untrap(UntrapProt) && !Untrap(UntrapProt == PAGE_READWRITE ? PAGE_WRITECOPY : PAGE_EXECUTE_WRITECOPY)) {
+        return false;
+      }
     }
     DetectMonoBackpatcherBlock(Thread, HostPc);
     return true;
@@ -305,12 +327,50 @@ void InvalidationTracker::EndUntrackedWrite(uint64_t Address, uint64_t Size) {
   InvalidateIntervalInternalLocked(AlignedBase, AlignedEnd - AlignedBase);
 }
 
+bool InvalidationTracker::TrackExecutableMapping(uint64_t Address) {
+  // The section is still mapped, up to its unmap syscall, but whatever is added for it now would outlive it
+  if (Address >= UnmappingSection.first && Address < UnmappingSection.second) {
+    UnmappingSectionMissed = true;
+    return false;
+  }
+
+  MEMORY_BASIC_INFORMATION Info;
+  if (NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Address), MemoryBasicInformation, &Info, sizeof(Info), nullptr) ||
+      Info.State != MEM_COMMIT || (Info.Protect & PAGE_GUARD) ||
+      !(ProtHasExec(Info.Protect) || (DEPDisabled && ProtIsReadable(Info.Protect)))) {
+    return false;
+  }
+
+  const auto Base = reinterpret_cast<uint64_t>(Info.BaseAddress);
+  AddExecutableInterval({Base, Base + Info.RegionSize}, Info.Protect);
+  return true;
+}
+
 FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
-  std::shared_lock Lock(IntervalsLock);
-  const auto XResult = XIntervals.Query(Address);
-  if (!XResult.Enclosed) {
+  {
+    std::shared_lock Lock(IntervalsLock);
+    if (XIntervals.Query(Address).Enclosed) {
+      return QueryExecutableRangeLocked(Address);
+    }
+  }
+
+  // Only memory whose protection a syscall set is known here: a view of a section that isn't an image, such as the code
+  // of an assembly in a .NET single-file bundle, is executable from its map syscall on, without any notification. This
+  // only runs in a compile, when the decoder gets to memory outside the intervals. An entry point that isn't executable
+  // compiles to a block that raises the fault, which stays cached, while a branch target there is asked about again by
+  // each compile that reaches it. The lock is held across the query, so a change of protection or a release that
+  // notifies after its syscall can't be overwritten by what the query saw before it. ThreadCreationMutex can't be taken
+  // for that: a compile holds the code invalidation mutex here, which the notifications take with ThreadCreationMutex
+  // held.
+  std::unique_lock Lock(IntervalsLock);
+  if (!XIntervals.Query(Address).Enclosed && !TrackExecutableMapping(Address)) {
     return {};
   }
+  return QueryExecutableRangeLocked(Address);
+}
+
+FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRangeLocked(uint64_t Address) {
+  const auto XResult = XIntervals.Query(Address);
   const auto RWXResult = RWXIntervals.Query(Address);
   if (RWXResult.Enclosed) {
     return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, true};

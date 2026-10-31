@@ -812,7 +812,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
 
   // Generate IR + Meta Info
   auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
-    GenerateIR(Thread, GuestRIP, Config.GDBSymbols(), MaxInst);
+    GenerateIR(Thread, GuestRIP, Config.GDBSymbols() || Config.ExtendedDebugInfo(), MaxInst);
   if (!IRView) {
     Thread->FrontendDecoder->ValidateDisownedOrFree();
     Thread->OpDispatcher->ValidateDisownedOrFree();

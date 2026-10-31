@@ -486,6 +486,16 @@
           "Can be very slow."
         ]
       },
+      "ExtendedDebugInfo": {
+        "Type": "bool",
+        "Default": "false",
+        "AffectsCodeGen": "true",
+        "Desc": [
+          "Records a host to guest address entry for every guest instruction in the block tail.",
+          "By default only instructions with side effects get one.",
+          "Lets a sampling profiler attribute samples to exact guest instructions."
+        ]
+      },
       "InjectLibSegFault": {
         "Type": "bool",
         "Default": "false",

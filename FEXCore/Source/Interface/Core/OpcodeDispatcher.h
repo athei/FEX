@@ -166,8 +166,10 @@ public:
     // Need to clear any named constants that were cached.
     ClearCachedNamedConstants();
 
-    // SSA values don't cross blocks.
+    // SSA values don't cross blocks, and a block can be entered from elsewhere.
     X87CompareNextPC = X87NoPC;
+    X87StatusNextPC = X87NoPC;
+    X87TestNextPC = X87NoPC;
   }
 
   IRPair<IROp_Jump> Jump() {
@@ -1402,6 +1404,12 @@ private:
   Ref X87CompareC0 {};
   Ref X87CompareC2 {};
   Ref X87CompareC3 {};
+  // The instruction after a FNSTSW AX with X87CompareFusion.
+  uint64_t X87StatusNextPC {X87NoPC};
+  // The instruction after an 8-bit TEST of anything with an immediate of two bits that directly follows such a FNSTSW AX,
+  // and that immediate.
+  uint64_t X87TestNextPC {X87NoPC};
+  uint64_t X87TestMask {};
 
   struct JumpTargetInfo {
     Ref BlockEntry;

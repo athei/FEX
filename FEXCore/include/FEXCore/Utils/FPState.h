@@ -6,6 +6,16 @@
 namespace FEXCore::FPState {
 enum class X87Tag : uint8_t { Valid = 0b00, Zero = 0b01, Special = 0b10, Empty = 0b11 };
 
+// x87 hardware reads bit 6 of the control word as one and bits 7, 13, 14 and 15 as zero, whatever was loaded.
+// CPUState::FCW keeps the word as loaded, so that loading it costs nothing, and only its readers apply these.
+static constexpr uint16_t FCWReadMask = 0x1f3f;
+static constexpr uint16_t FCWReadSet = 0x0040;
+
+// The control word as the guest reads it.
+static inline uint16_t ReconstructFCW(uint16_t FCW) {
+  return (FCW & FCWReadMask) | FCWReadSet;
+}
+
 static inline X87Tag GetX87Tag(uint64_t (&Reg)[2], bool Valid) {
   if (!Valid) {
     return X87Tag::Empty;

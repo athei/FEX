@@ -588,7 +588,7 @@ void StoreWowContextFromState(WOW64_CONTEXT* Context) {
   CTX->ReconstructXMMRegisters(Thread, reinterpret_cast<__uint128_t*>(XSave->XmmRegisters), nullptr);
   memcpy(XSave->FloatRegisters, State.mm, sizeof(State.mm));
 
-  XSave->ControlWord = State.FCW;
+  XSave->ControlWord = FEXCore::FPState::ReconstructFCW(State.FCW);
   XSave->MxCsr = State.mxcsr;
   XSave->StatusWord = (State.flags[FEXCore::X86State::X87FLAG_TOP_LOC] << 11) | (State.flags[FEXCore::X86State::X87FLAG_C0_LOC] << 8) |
                       (State.flags[FEXCore::X86State::X87FLAG_C1_LOC] << 9) | (State.flags[FEXCore::X86State::X87FLAG_C2_LOC] << 10) |

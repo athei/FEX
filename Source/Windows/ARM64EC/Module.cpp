@@ -1277,7 +1277,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
   // control, status and tag words, so give them the thread's own.
   if ((GuestContext->ContextFlags & CONTEXT_FLOATING_POINT) == CONTEXT_FLOATING_POINT) {
     const auto& State = CPUArea.ThreadState()->CurrentFrame->State;
-    GuestContext->FltSave.ControlWord = State.FCW;
+    GuestContext->FltSave.ControlWord = FEXCore::FPState::ReconstructFCW(State.FCW);
     GuestContext->FltSave.StatusWord = Exception::GetX87StatusWord(State);
     GuestContext->FltSave.TagWord = State.AbridgedFTW;
   }

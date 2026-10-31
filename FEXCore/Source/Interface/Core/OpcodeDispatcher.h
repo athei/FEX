@@ -165,6 +165,9 @@ public:
 
     // Need to clear any named constants that were cached.
     ClearCachedNamedConstants();
+
+    // SSA values don't cross blocks.
+    X87CompareNextPC = X87NoPC;
   }
 
   IRPair<IROp_Jump> Jump() {
@@ -1391,6 +1394,14 @@ private:
   X86Tables::DecodedOp FollowingInsts {};
   size_t FollowingCount {};
 
+  // The C flags that the x87 compare before the instruction at this PC wrote to the context.
+  // Valid in the IR block of the compare, so a new block clears the PC. No guest PC is ~0, address 0 can hold code.
+  static constexpr uint64_t X87NoPC = ~0ULL;
+  uint64_t X87CompareNextPC {X87NoPC};
+  Ref X87CompareC0 {};
+  Ref X87CompareC2 {};
+  Ref X87CompareC3 {};
+
   struct JumpTargetInfo {
     Ref BlockEntry;
     bool HaveEmitted;
@@ -2358,7 +2369,7 @@ private:
 
   // Set x87 comparison flags based on the result set by Arm FCMP. Clobbers
   // NZCV on flagm2 platforms.
-  void ConvertNZCVToX87() {
+  void ConvertNZCVToX87(X86Tables::DecodedOp Op) {
     LOGMAN_THROW_A_FMT(NZCVDirty && CachedNZCV, "NZCV must be saved");
 
     Ref V = _NZCVSelect01(CondForNZCVBit(FEXCore::X86State::RFLAG_OF_RAW_LOC, false));
@@ -2381,6 +2392,11 @@ private:
     SetRFLAG<FEXCore::X86State::X87FLAG_C1_LOC>(Constant(0));
     SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(V);
     SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(Z);
+
+    X87CompareNextPC = Op->PC + Op->InstSize;
+    X87CompareC0 = C;
+    X87CompareC2 = V;
+    X87CompareC3 = Z;
   }
 
   // Helper to store a variable shift and calculate its flags for a variable

@@ -801,11 +801,46 @@ Ref OpDispatchBuilder::ReconstructFSW_Helper(Ref T) {
   return FSW;
 }
 
+// Whether nothing can see the x87 state in the context before the sync at the end of the guest block: the instructions
+// after this one only work on registers, so none can fault, and the last is a conditional branch, in front of which the
+// x87 stack pass syncs. A suspend stops a thread at a block entry or a back edge, after that sync. A branch target in
+// the sequence ends the decoded block early, and then this returns false.
+bool OpDispatchBuilder::X87StateUnseenUntilBlockEnd() const {
+  if (!X87CompareFusion || !ReducedPrecisionMode) {
+    return false;
+  }
+
+  const auto IsAH = [](const X86Tables::DecodedInst& Inst) {
+    return Inst.Dest.IsGPR() && Inst.Dest.Data.GPR.GPR == X86State::REG_RAX && Inst.Dest.Data.GPR.HighBits;
+  };
+
+  for (size_t i = 0; i < FollowingCount; ++i) {
+    const auto& Inst = FollowingInsts[i];
+    // An instruction that failed to decode has no table entry, and the rest of its fields mean nothing.
+    if (!Inst.TableInfo || (Inst.Flags & X86Tables::DecodeFlags::FLAG_LOCK)) {
+      return false;
+    }
+
+    if (i + 1 == FollowingCount) {
+      return (Inst.TableInfo->Flags & X86Tables::InstFlags::FLAGS_SETS_RIP) && Inst.OP >= 0x70 && Inst.OP <= 0x8F && Inst.Src[0].IsLiteral();
+    }
+
+    const bool TestAH = Inst.OPRaw == 0xF6 && Inst.ModRM == 0xC4 && IsAH(Inst);
+    const bool AndCmpXorAH = Inst.OPRaw == 0x80 && (Inst.ModRM == 0xE4 || Inst.ModRM == 0xF4 || Inst.ModRM == 0xFC) && IsAH(Inst);
+    const bool SAHF = Inst.OPRaw == 0x9E && Inst.InstSize == 1;
+    if (!TestAH && !AndCmpXorAH && !SAHF) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 // Store Status Word
 // There's no load Status Word instruction but you can load it through frstor
 // or fldenv.
 void OpDispatchBuilder::X87FNSTSW(OpcodeArgs, bool DestRAX) {
-  Ref TopValue = _SyncStackToSlow();
+  Ref TopValue = DestRAX && X87StateUnseenUntilBlockEnd() ? _ReadStackTop() : _SyncStackToSlow();
   Ref StatusWord = ReconstructFSW_Helper(TopValue);
   if (DestRAX) {
     StoreGPRRegister(X86State::REG_RAX, StatusWord, OpSize::i16Bit);

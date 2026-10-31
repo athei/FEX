@@ -671,6 +671,15 @@
           "Emulates X87 floating point using 64-bit precision. This reduces emulation accuracy and may result in rendering bugs."
         ]
       },
+      "X87CompareFusion": {
+        "Type": "bool",
+        "Default": "true",
+        "AffectsCodeGen": "true",
+        "Desc": [
+          "With X87ReducedPrecision, shortens x87 compare, FNSTSW AX, TEST AH and Jcc sequences.",
+          "Guest visible state stays the same. On by default, 0 turns it off."
+        ]
+      },
       "StallProcess": {
         "Type": "bool",
         "Default": "false",

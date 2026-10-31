@@ -3091,6 +3091,14 @@
         "HasSideEffects": true,
         "DestSize": "OpSize::i64Bit"
       },
+      "GPR = ReadStackTop": {
+        "Desc": [
+          "Returns the current stack top, without writing anything to the context."
+        ],
+        "X87": true,
+        "HasSideEffects": true,
+        "DestSize": "OpSize::i64Bit"
+      },
       "StackForceSlow": {
         "Desc": [
           "Forces the slow path."

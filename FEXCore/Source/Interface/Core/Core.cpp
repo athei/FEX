@@ -694,6 +694,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           }
 
           Thread->OpDispatcher->SetForceTSO(ForceTSO);
+          Thread->OpDispatcher->SetFollowingInstructions(DecodedInfo + 1, InstsInBlock - i - 1);
           std::invoke(Fn, Thread->OpDispatcher, DecodedInfo);
           if (Thread->OpDispatcher->HadDecodeFailure()) {
             HadDispatchError = true;

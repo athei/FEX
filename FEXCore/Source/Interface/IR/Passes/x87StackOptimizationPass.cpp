@@ -1760,6 +1760,12 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         break;
       }
 
+      case OP_READSTACKTOP: {
+        // TopOffset is zero on the slow path, where the cached top is current.
+        IREmit->ReplaceUsesWithAfter(CodeNode, GetOffsetTopWithCache_Slow(StackData.TopOffset, true), CodeNode);
+        break;
+      }
+
       case OP_STACKFORCESLOW: {
         MigrateToSlowPathIf(true);
         InvalidateCachedRegs();

@@ -399,10 +399,7 @@ void OpDispatchBuilder::X87FNSTENV(OpcodeArgs) {
   Ref Mem = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
   Mem = AppendSegmentOffset(Mem, Op->Flags);
 
-  {
-    auto FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
-    _StoreMemGPR(Size, Mem, FCW, Size);
-  }
+  { _StoreMemGPR(Size, Mem, ReconstructFCW_Helper(), Size); }
 
   { _StoreMemGPR(Size, ReconstructFSW_Helper(), Mem, Constant(IR::OpSizeToSize(Size) * 1), Size, MemOffsetType::SXTX, 1); }
 
@@ -498,10 +495,7 @@ void OpDispatchBuilder::X87FNSAVE(OpcodeArgs) {
   const auto Size = OpSizeFromDst(Op);
   Ref Mem = MakeSegmentAddress(Op, Op->Dest);
   Ref Top = GetX87Top();
-  {
-    auto FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
-    _StoreMemGPR(Size, Mem, FCW, Size);
-  }
+  { _StoreMemGPR(Size, Mem, ReconstructFCW_Helper(), Size); }
 
   { _StoreMemGPR(Size, ReconstructFSW_Helper(), Mem, Constant(IR::OpSizeToSize(Size) * 1), Size, MemOffsetType::SXTX, 1); }
 
@@ -628,10 +622,15 @@ void OpDispatchBuilder::X87FRSTOR(OpcodeArgs) {
   X87ControlWordChanged();
 }
 
+// The control word as the guest reads it, see FPState::ReconstructFCW.
+Ref OpDispatchBuilder::ReconstructFCW_Helper() {
+  Ref FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
+  return _Or(OpSize::i32Bit, _And(OpSize::i32Bit, FCW, Constant(FPState::FCWReadMask)), Constant(FPState::FCWReadSet));
+}
+
 // Load / Store Control Word
 void OpDispatchBuilder::X87FSTCW(OpcodeArgs) {
-  auto FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
-  StoreResultGPR(Op, FCW);
+  StoreResultGPR(Op, ReconstructFCW_Helper());
 }
 
 void OpDispatchBuilder::X87FLDCW(OpcodeArgs) {

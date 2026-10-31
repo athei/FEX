@@ -3065,10 +3065,7 @@ void OpDispatchBuilder::SaveX87State(OpcodeArgs, Ref MemBase) {
     //   16 | FDP[31:0] | FDS         | <R> | MXCSR     | MXCSR_MASK|
   }
 
-  {
-    auto FCW = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, FCW));
-    _StoreMemGPR(OpSize::i16Bit, MemBase, FCW, OpSize::i16Bit);
-  }
+  { _StoreMemGPR(OpSize::i16Bit, MemBase, ReconstructFCW_Helper(), OpSize::i16Bit); }
 
   { _StoreMemGPR(OpSize::i16Bit, ReconstructFSW_Helper(), MemBase, Constant(2), OpSize::i16Bit, MemOffsetType::SXTX, 1); }
 

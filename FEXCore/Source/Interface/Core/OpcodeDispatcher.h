@@ -719,6 +719,7 @@ public:
   void VZEROOp(OpcodeArgs);
 
   // X87 Ops
+  Ref ReconstructFCW_Helper();
   Ref ReconstructFSW_Helper(Ref T = nullptr);
   // Returns new x87 stack top from FSW.
   Ref ReconstructX87StateFromFSW_Helper(Ref FSW);

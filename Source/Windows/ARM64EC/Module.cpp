@@ -152,6 +152,7 @@ struct FrontendThreadData {
   bool InCrossProcessWork {};
   // Set from the first to the second notification around a syscall that takes code away, see NotifyAroundSyscall
   bool HoldsCodeLock {};
+  FEX::Windows::InvalidationTracker::FetchRetry LastFetchRetry {};
   bool InUntrackedRead {};
   uint64_t UntrackedReadAddress {};
   uint64_t UntrackedReadSize {};
@@ -186,6 +187,22 @@ std::pair<NTSTATUS, ThreadCPUArea> GetThreadCPUArea(HANDLE Thread) {
 ThreadCPUArea GetCPUArea() {
   return ThreadCPUArea(NtCurrentTeb());
 }
+
+class ScopedCallbackDisable {
+private:
+  bool Prev;
+
+public:
+  ScopedCallbackDisable() {
+    const auto CPUArea = GetCPUArea();
+    Prev = CPUArea.Area->InSyscallCallback;
+    CPUArea.Area->InSyscallCallback = true;
+  }
+
+  ~ScopedCallbackDisable() {
+    GetCPUArea().Area->InSyscallCallback = Prev;
+  }
+};
 
 // Wine defers a suspend of a thread in a syscall callback until it leaves the callback. Leaves that state, takes a
 // suspend that was deferred already the way Wine's leave_syscall_callback does, and returns the state to restore.
@@ -794,12 +811,35 @@ static void RaiseException(FEXCore::Core::InternalThreadState* Thread, const EXC
   // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
   // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
   // TODO: Can extend wine to support this by mapping the remaining EFlags into reserved cpsr members.
-  uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
-  EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
-  CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
+  const uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
+  CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags & ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC));
 
   BOOL FirstChance = TRUE;
   EXCEPTION_RECORD GuestRec = FEX::Windows::HandleGuestException(Fault, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
+  const bool Retry = FEX::Windows::ApplyFetchFault(GuestRec, [Thread](uint64_t Address) {
+    // SynchronousExceptionHandler gets here outside of the syscall callback state, where memory syscalls that FEX makes
+    // while InvalidationTracker holds its lock would call the hooks, which wait for that lock.
+    ScopedCallbackDisable guard;
+    std::scoped_lock Lock(ThreadCreationMutex);
+    return InvalidationTracker->HandleFetchFault(Address, GetFrontendThreadData(Thread)->LastFetchRetry);
+  });
+  if (Retry) {
+    // The thread state is in the frame, so this only has to get back into the dispatcher, as for inline SMC
+    CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags);
+    const auto CPUArea = GetCPUArea();
+    ARM64_NT_CONTEXT ResumeContext {};
+    ResumeContext.ContextFlags = CONTEXT_ARM64_FULL;
+    ResumeContext.Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
+    ResumeContext.Sp = CPUArea.EmulatorStackBase();
+    ResumeContext.X11 = 0;                                        // Clear ENTRY_FILL_SRA_SINGLE_INST_REG
+    ResumeContext.X17 = reinterpret_cast<uint64_t>(CPUArea.Area); // Set EC_ENTRY_CPUAREA_REG
+    ResumeContext.X18 = reinterpret_cast<uint64_t>(NtCurrentTeb());
+    ResumeContext.Fpcr = GuestContext.Fpcr;
+    ResumeContext.Fpsr = GuestContext.Fpsr;
+    EnsureHardwareTSOForContinue(CPUArea, ResumeContext.Pc);
+    NtContinueNative(&ResumeContext, false);
+  }
+
   if (GuestRec.ExceptionCode == EXCEPTION_SINGLE_STEP) {
     GuestContext.Cpsr &= ~(1 << 21); // PSTATE.SS
   } else if (GuestRec.ExceptionCode == EXCEPTION_BREAKPOINT) {
@@ -1096,22 +1136,6 @@ void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {
   CTX->PauseBackgroundThreads();
   GetCPUArea().Area->InSyscallCallback = Prev;
 }
-
-class ScopedCallbackDisable {
-private:
-  bool Prev;
-
-public:
-  ScopedCallbackDisable() {
-    const auto CPUArea = GetCPUArea();
-    Prev = CPUArea.Area->InSyscallCallback;
-    CPUArea.Area->InSyscallCallback = true;
-  }
-
-  ~ScopedCallbackDisable() {
-    GetCPUArea().Area->InSyscallCallback = Prev;
-  }
-};
 
 // Returns true if exception dispatch should be halted and the execution context restored to NativeContext
 bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* Exception, CONTEXT* GuestContext, ARM64_NT_CONTEXT* NativeContext) {

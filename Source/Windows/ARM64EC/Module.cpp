@@ -815,7 +815,8 @@ static void RaiseException(FEXCore::Core::InternalThreadState* Thread, const EXC
   CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags & ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC));
 
   BOOL FirstChance = TRUE;
-  EXCEPTION_RECORD GuestRec = FEX::Windows::HandleGuestException(Fault, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
+  EXCEPTION_RECORD GuestRec =
+    FEX::Windows::HandleGuestException(ThreadCreationMutex, Fault, Rec, GuestContext.Pc, GuestContext.X8, GuestContext.X0, FirstChance);
   const bool Retry = FEX::Windows::ApplyFetchFault(GuestRec, [Thread](uint64_t Address) {
     // SynchronousExceptionHandler gets here outside of the syscall callback state, where memory syscalls that FEX makes
     // while InvalidationTracker holds its lock would call the hooks, which wait for that lock.

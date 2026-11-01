@@ -8,6 +8,8 @@
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 
+#include "InvalidationTracker.h"
+
 namespace FEX::Windows {
 // The opcode of the guest instruction at Rip, past its legacy and (64-bit only) REX prefixes, or nullptr when the
 // prefixes take up the 15 bytes an instruction can have.
@@ -153,5 +155,24 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
   // Default to SIGILL
   Dst.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
   return Dst;
+}
+
+// The decoder stays out of guard pages, so executing one ends in the execute fault of a block that stopped there. Passes
+// the fault in Rec, as returned by HandleGuestException, to Handle(Address), which takes the first byte that couldn't be
+// fetched. Rec becomes the guard page's one exception if that's what Handle says, after which the guest's next attempt
+// runs the code, or faults if the page isn't executable. Returns true if the thread must run the instruction again
+// instead of raising Rec.
+template<typename THandleFetchFault>
+static inline bool ApplyFetchFault(EXCEPTION_RECORD& Rec, THandleFetchFault&& Handle) {
+  if (Rec.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || Rec.NumberParameters != 2 || Rec.ExceptionInformation[0] != EXCEPTION_EXECUTE_FAULT) {
+    return false;
+  }
+
+  switch (Handle(static_cast<uint64_t>(Rec.ExceptionInformation[1]))) {
+  case InvalidationTracker::FetchFault::GuardPage: Rec.ExceptionCode = STATUS_GUARD_PAGE_VIOLATION; return false;
+  case InvalidationTracker::FetchFault::Retry: return true;
+  case InvalidationTracker::FetchFault::Raise: return false;
+  }
+  return false;
 }
 } // namespace FEX::Windows

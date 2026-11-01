@@ -822,6 +822,7 @@ public:
   }
 
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override {
+    std::scoped_lock Lock(ThreadCreationMutex);
     InvalidationTracker->InvalidateAlignedInterval(Start, Length, false);
   }
 

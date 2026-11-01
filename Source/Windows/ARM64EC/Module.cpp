@@ -931,6 +931,10 @@ public:
   }
 
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override {
+    // JIT code gets here for code that a full SMC check found changed, outside of the syscall callback state. Invalidating
+    // clears the call-ret stack with FEX's own memory syscalls, whose hooks would wait for the mutexes held for it.
+    ScopedCallbackDisable guard;
+    std::scoped_lock Lock(ThreadCreationMutex);
     InvalidationTracker->InvalidateAlignedInterval(Start, Length, false);
   }
 

@@ -1333,7 +1333,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
   BOOL FirstChance = TRUE;
   EXCEPTION_RECORD GuestException =
-    FEX::Windows::HandleGuestException(Fault, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
+    FEX::Windows::HandleGuestException(ThreadCreationMutex, Fault, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
   const bool Retry = FEX::Windows::ApplyFetchFault(GuestException, [Thread](uint64_t Address) {
     std::scoped_lock Lock(ThreadCreationMutex);
     return InvalidationTracker->HandleFetchFault(Address, GetFrontendThreadData(Thread)->LastFetchRetry);

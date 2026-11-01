@@ -45,6 +45,10 @@ static bool ProtIsWritable(ULONG Prot) {
   return (Prot & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
 }
 
+bool InvalidationTracker::ProtIsEffectivelyExecutable(ULONG Prot) const {
+  return ProtHasExec(Prot) || (DEPDisabled && ProtIsReadable(Prot));
+}
+
 void InvalidationTracker::AddExecutableInterval(FEXCore::IntervalList<uint64_t>::Interval ProtInterval, ULONG Prot) {
   XIntervals.Insert(ProtInterval);
   // A range made executable and read-only stays in RWXIntervals, so a write to it is still taken for SMC and made
@@ -63,7 +67,7 @@ void InvalidationTracker::AddExecutableInterval(FEXCore::IntervalList<uint64_t>:
   }
 }
 
-void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot) {
+void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot, bool CodeLockHeld) {
   const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
   const auto AlignedSize = (Address - AlignedBase + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
 
@@ -72,9 +76,7 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
 
     FEXCore::IntervalList<uint64_t>::Interval ProtInterval {AlignedBase, AlignedBase + AlignedSize};
 
-    const bool EffectiveExec = ProtHasExec(Prot) || (DEPDisabled && ProtIsReadable(Prot));
-
-    if (EffectiveExec) {
+    if (ProtIsEffectivelyExecutable(Prot)) {
       AddExecutableInterval(ProtInterval, Prot);
       return true;
     } else if (XIntervals.Intersect(ProtInterval)) {
@@ -91,8 +93,87 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
 
   if (NeedsInvalidate) {
     // IntervalsLock cannot be held during invalidation
-    InvalidateIntervalInternal(AlignedBase, AlignedSize);
+    InvalidateIntervalInternal(AlignedBase, AlignedSize, CodeLockHeld);
   }
+}
+
+bool InvalidationTracker::ProtectTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Prot) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+  if (AlignedEnd <= AlignedBase) {
+    return false;
+  }
+
+  std::shared_lock Lock(IntervalsLock);
+  if (!(Prot & PAGE_GUARD) && ProtIsEffectivelyExecutable(Prot)) {
+    return false;
+  }
+  if (XIntervals.Intersect({AlignedBase, AlignedEnd})) {
+    return true;
+  }
+
+  // A page that isn't in the intervals can be there any moment: TrackExecutableMapping adds it in a compile, without
+  // ThreadCreationMutex. So this asks for what such a compile would see, or would see once any access, of another thread
+  // too, used up the guard of the page, which takes no notification.
+  uint64_t Base = AlignedBase;
+  while (Base < AlignedEnd) {
+    MEMORY_BASIC_INFORMATION Info;
+    if (NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Base), MemoryBasicInformation, &Info, sizeof(Info), nullptr)) {
+      break;
+    }
+    if (Info.State == MEM_COMMIT && ProtIsEffectivelyExecutable(Info.Protect & ~PAGE_GUARD)) {
+      return true;
+    }
+    Base = reinterpret_cast<uint64_t>(Info.BaseAddress) + Info.RegionSize;
+  }
+  return false;
+}
+
+bool InvalidationTracker::AllocTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Type, ULONG Prot) {
+  // A reservation can only succeed on free memory, and MEM_RESET(_UNDO) leaves the protection alone.
+  return Address && (Type & MEM_COMMIT) && !(Type & (MEM_RESERVE | MEM_RESET | MEM_RESET_UNDO)) && ProtectTakesCodeAway(Address, Size, Prot);
+}
+
+bool InvalidationTracker::FreeTakesCodeAway(uint64_t Address, uint64_t Size) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+  if (!AlignedBase || (Size && AlignedEnd <= AlignedBase)) {
+    return true;
+  }
+
+  if (Size && OverlapsExecutableInterval(AlignedBase, AlignedEnd - AlignedBase)) {
+    return true;
+  }
+
+  // Without a size, a release or decommit covers the whole allocation from its base, which ends where the regions of
+  // another allocation or free memory start. As for a protect, a page that is executable, or will be once its guard is
+  // used up, can enter the intervals in a compile any moment, see ProtectTakesCodeAway. IntervalsLock isn't held across
+  // the walk, so a compile that misses the intervals doesn't wait for it in QueryExecutableRange. A page that compile
+  // adds is one the walk counts as executable. Apart from a guard being used up, only a protect, commit or DEP change
+  // makes a page of an allocation executable, as no view can be mapped into one, and those of this process wait for
+  // ThreadCreationMutex, which the caller holds. That also keeps DEPDisabled as it is.
+  uint64_t Base = AlignedBase;
+  void* AllocationBase {};
+  while (!Size || Base < AlignedEnd) {
+    MEMORY_BASIC_INFORMATION Info;
+    if (NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(Base), MemoryBasicInformation, &Info, sizeof(Info), nullptr)) {
+      break;
+    }
+    if (!Size) {
+      if (Base == AlignedBase) {
+        AllocationBase = Info.AllocationBase;
+      }
+      if (Info.State == MEM_FREE || Info.AllocationBase != AllocationBase) {
+        break;
+      }
+    }
+    if (Info.State == MEM_COMMIT && ProtIsEffectivelyExecutable(Info.Protect & ~PAGE_GUARD)) {
+      return true;
+    }
+    Base = reinterpret_cast<uint64_t>(Info.BaseAddress) + Info.RegionSize;
+  }
+
+  return !Size && Base > AlignedBase && OverlapsExecutableInterval(AlignedBase, Base - AlignedBase);
 }
 
 void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
@@ -230,7 +311,7 @@ void InvalidationTracker::FinishSectionUnmap() {
   }
 }
 
-void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free) {
+void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free, bool CodeLockHeld) {
   if (!Address) {
     // Match the Windows behaviour when passed a NULL base address.
     Size = std::numeric_limits<uint64_t>::max();
@@ -246,7 +327,7 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
     RWXIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
   }
 
-  InvalidateIntervalInternal(AlignedBase, AlignedSize);
+  InvalidateIntervalInternal(AlignedBase, AlignedSize, CodeLockHeld);
 }
 
 bool InvalidationTracker::OverlapsExecutableInterval(uint64_t Address, uint64_t Size) {
@@ -369,8 +450,10 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
   // compiles to a block that raises the fault, which stays cached, while a branch target there is asked about again by
   // each compile that reaches it. The lock is held across the query, so a change of protection or a release that
   // notifies after its syscall can't be overwritten by what the query saw before it. ThreadCreationMutex can't be taken
-  // for that: a compile holds the code invalidation mutex here, which the notifications take with ThreadCreationMutex
-  // held.
+  // for that. The locks go in the order ThreadCreationMutex, code invalidation mutex, IntervalsLock, and a compile holds
+  // the code invalidation mutex here. A free, protect or commit that takes code away holds that mutex from before its
+  // syscall on, see ProtectTakesCodeAway, so no compile gets here during one. An unmap doesn't, as UnmappingSection
+  // already keeps what a compile finds here out of the intervals, see TrackExecutableMapping.
   std::unique_lock Lock(IntervalsLock);
   if (!XIntervals.Query(Address).Enclosed && !TrackExecutableMapping(Address)) {
     return {};
@@ -451,7 +534,12 @@ ULONG InvalidationTracker::GetUntrapProt(uint64_t Address) const {
   return PAGE_EXECUTE_READWRITE;
 }
 
-void InvalidationTracker::InvalidateIntervalInternal(uint64_t Address, uint64_t Size) {
+void InvalidationTracker::InvalidateIntervalInternal(uint64_t Address, uint64_t Size, bool CodeLockHeld) {
+  if (CodeLockHeld) {
+    InvalidateIntervalInternalLocked(Address, Size);
+    return;
+  }
+
   std::scoped_lock CodeLock(CTX.GetCodeInvalidationMutex());
   InvalidateIntervalInternalLocked(Address, Size);
 }

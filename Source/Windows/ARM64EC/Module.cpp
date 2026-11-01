@@ -150,6 +150,8 @@ struct ThreadCPUArea {
 struct FrontendThreadData {
   // Set while the thread processes the cross-process work, see ProcessCrossProcessWork
   bool InCrossProcessWork {};
+  // Set from the first to the second notification around a syscall that takes code away, see NotifyAroundSyscall
+  bool HoldsCodeLock {};
   bool InUntrackedRead {};
   uint64_t UntrackedReadAddress {};
   uint64_t UntrackedReadSize {};
@@ -238,22 +240,36 @@ void ProcessCrossProcessWork() {
   Data->InCrossProcessWork = PrevWork;
 }
 
-// Handles a notification of a pair around a syscall, with Work done in the second one (After), see ProcessCrossProcessWork
-template<typename Func>
-void NotifyAroundSyscall(BOOL After, Func&& Work) {
+// Handles a notification of a pair around a syscall, with Work done in the second one (After), see ProcessCrossProcessWork.
+// If TakesCodeAway returns true, which it does with ThreadCreationMutex held, the code invalidation mutex is held from the
+// first notification to the end of Work, which gets true for that, see InvalidationTracker::ProtectTakesCodeAway. Wine
+// doesn't call these hooks for FEX's own syscalls, as a compile runs in the syscall callback state, so no compile is
+// waited for by the thread running it, and a suspend or termination of the thread waits for the end of the second one.
+// That is not done for queued items: the other process doesn't wait for this one, so it can't be held off by a lock here.
+template<typename TakesCodeAwayFunc, typename WorkFunc>
+void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc&& Work) {
   auto* Thread = GetCPUArea().ThreadState();
-  if (Thread->FrontendPtr && GetFrontendThreadData(Thread)->InCrossProcessWork) {
+  auto* Data = Thread->FrontendPtr ? GetFrontendThreadData(Thread) : nullptr;
+  if (Data && Data->InCrossProcessWork) {
     if (After) {
       std::scoped_lock Lock(ThreadCreationMutex);
-      Work();
+      Work(false);
     }
     return;
   }
 
   if (!After) {
     ThreadCreationMutex.lock();
+    if (Data && TakesCodeAway()) {
+      CTX->GetCodeInvalidationMutex().lock();
+      Data->HoldsCodeLock = true;
+    }
   } else {
-    Work();
+    const bool CodeLockHeld = Data && std::exchange(Data->HoldsCodeLock, false);
+    Work(CodeLockHeld);
+    if (CodeLockHeld) {
+      CTX->GetCodeInvalidationMutex().unlock();
+    }
     ThreadCreationMutex.unlock();
   }
 }
@@ -1292,12 +1308,15 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
     return;
   }
 
-  NotifyAroundSyscall(After, [&] {
-    // Reserved memory can't be read, whatever its protection, and MEM_RESET(_UNDO) ignores the passed permissions
-    if (!Status && (Type & MEM_COMMIT) && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
-      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
-    }
-  });
+  NotifyAroundSyscall(
+    After,
+    [&] { return InvalidationTracker->AllocTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Type, Prot); },
+    [&](bool CodeLockHeld) {
+      // Reserved memory can't be read, whatever its protection, and MEM_RESET(_UNDO) ignores the passed permissions
+      if (!Status && (Type & MEM_COMMIT) && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
+        InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot, CodeLockHeld);
+      }
+    });
 }
 
 void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
@@ -1305,11 +1324,13 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
     return;
   }
 
-  NotifyAroundSyscall(After, [&] {
-    if (!Status) {
-      InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
-    }
-  });
+  NotifyAroundSyscall(
+    After, [&] { return InvalidationTracker->FreeTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size)); },
+    [&](bool CodeLockHeld) {
+      if (!Status) {
+        InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true, CodeLockHeld);
+      }
+    });
 }
 
 void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, NTSTATUS Status) {
@@ -1317,11 +1338,15 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
     return;
   }
 
-  NotifyAroundSyscall(After, [&] {
-    if (!Status) {
-      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
-    }
-  });
+  NotifyAroundSyscall(
+    After,
+    [&] { return InvalidationTracker->ProtectTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt); },
+    [&](bool CodeLockHeld) {
+      if (!Status) {
+        InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt,
+                                                                CodeLockHeld);
+      }
+    });
 }
 
 NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {

@@ -25,7 +25,8 @@ namespace FEX::Windows {
 class InvalidationTracker {
 public:
   InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads);
-  void HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot);
+  // CodeLockHeld is true when the caller holds the code invalidation mutex, see ProtectTakesCodeAway
+  void HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot, bool CodeLockHeld = false);
   void HandleProcessExecuteFlagsChange(ULONG Flags);
   void HandleImageMap(std::string_view Name, uint64_t Address);
   struct InvalidateContainingSectionResult {
@@ -36,7 +37,23 @@ public:
   // Called after the syscall of every unmap of this process, with ThreadCreationMutex held since the call of
   // InvalidateContainingSection before it. Ends the range that call kept out of the intervals, if it found a section.
   void FinishSectionUnmap();
-  void InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free);
+  void InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free, bool CodeLockHeld = false);
+
+  // Whether a syscall giving the range the protection Prot takes code away, in which case the caller must hold the code
+  // invalidation mutex from before the syscall until its intervals are updated after it. A compile reading a page that
+  // goes away faults with that mutex held shared, in the middle of the decoder, and the intervals can't protect it: they
+  // say what was executable when the compile asked. A compile running after the syscall but before the intervals are
+  // updated would also protect a page that just became writable, see ProtectRWXIntervalsInternal. Called with
+  // ThreadCreationMutex held, before the syscall, so with the arguments the syscall got, not the range it will use.
+  bool ProtectTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Prot);
+  // The same for an allocation syscall: a commit over existing memory sets the protection like a protect does
+  bool AllocTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Type, ULONG Prot);
+  // The same for a free syscall, which takes code away where the range, or the allocation for a size of 0, is in the
+  // intervals or has a committed page that is executable, or will be once its guard is used up. Otherwise a compile only
+  // reads the range once a protect or commit has made it executable, and those of this process wait for
+  // ThreadCreationMutex, which stays held across the syscall. Those of another process don't, as for a protect.
+  bool FreeTakesCodeAway(uint64_t Address, uint64_t Size);
+
   // Code is only compiled from executable intervals and is invalidated when its interval stops being executable, so a
   // write to memory this returns false for can't affect any code.
   bool OverlapsExecutableInterval(uint64_t Address, uint64_t Size);
@@ -56,10 +73,11 @@ private:
   void AddExecutableInterval(FEXCore::IntervalList<uint64_t>::Interval ProtInterval, ULONG Prot);
   bool TrackExecutableMapping(uint64_t Address);
   FEXCore::HLE::ExecutableRangeInfo QueryExecutableRangeLocked(uint64_t Address);
+  bool ProtIsEffectivelyExecutable(ULONG Prot) const;
 
   void DetectMonoBackpatcherBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC);
   void DisableSMCDetection();
-  void InvalidateIntervalInternal(uint64_t Address, uint64_t Size);
+  void InvalidateIntervalInternal(uint64_t Address, uint64_t Size, bool CodeLockHeld = false);
   // NOTE: This assumed CodeInvalidationMutex is locked by the caller
   void InvalidateIntervalInternalLocked(uint64_t Address, uint64_t Size);
 

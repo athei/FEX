@@ -10,12 +10,39 @@
 
 #include "InvalidationTracker.h"
 
+#include <algorithm>
+#include <cstring>
+#include <mutex>
+
 namespace FEX::Windows {
-// The opcode of the guest instruction at Rip, past its legacy and (64-bit only) REX prefixes, or nullptr when the
+// Copies as much as can be read of the guest instruction at Rip, leaving the rest of Code as it is. A block keeps running
+// while another thread takes its code away, so an exception it raised can get here after the code is gone. Mutex is
+// ThreadCreationMutex, which the notifications of alloc, free, protect and unmap hold across their syscalls. Those are the
+// syscalls of this process that can take a page, so none takes it between the query and the copy.
+template<typename TMutex>
+static inline void ReadGuestInstruction(TMutex& Mutex, uint64_t Rip, uint8_t (&Code)[16]) {
+  std::scoped_lock Lock(Mutex);
+
+  size_t Copied = 0;
+  while (Copied < sizeof(Code)) {
+    auto* Address = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(Rip + Copied));
+    MEMORY_BASIC_INFORMATION Info;
+    if (NtQueryVirtualMemory(NtCurrentProcess(), Address, MemoryBasicInformation, &Info, sizeof(Info), nullptr) ||
+        Info.State != MEM_COMMIT || (Info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+      return;
+    }
+
+    const auto* RegionEnd = static_cast<const uint8_t*>(Info.BaseAddress) + Info.RegionSize;
+    const size_t Size = std::min<size_t>(sizeof(Code) - Copied, RegionEnd - Address);
+    std::memcpy(Code + Copied, Address, Size);
+    Copied += Size;
+  }
+}
+
+// The opcode of the guest instruction at Code, past its legacy and (64-bit only) REX prefixes, or nullptr when the
 // prefixes take up the 15 bytes an instruction can have.
 template<typename TReg>
-static inline const uint8_t* SkipPrefixes(TReg Rip) {
-  const auto* Code = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(Rip));
+static inline const uint8_t* SkipPrefixes(const uint8_t* Code) {
   for (size_t i = 0; i < 15; i++, Code++) {
     switch (*Code) {
     case 0x26:
@@ -40,9 +67,11 @@ static inline const uint8_t* SkipPrefixes(TReg Rip) {
 
 // Whether the guest instruction at Rip loads a segment register and so raises #GP from the segment checks: IRET, MOV to
 // a segment register or POP of one.
-template<typename TReg>
-static inline bool IsSegmentLoad(TReg Rip) {
-  const auto* Code = SkipPrefixes(Rip);
+template<typename TReg, typename TMutex>
+static inline bool IsSegmentLoad(TMutex& ThreadCreationMutex, TReg Rip) {
+  uint8_t Instruction[16] {};
+  ReadGuestInstruction(ThreadCreationMutex, Rip, Instruction);
+  const auto* Code = SkipPrefixes<TReg>(Instruction);
   if (!Code) {
     return false;
   }
@@ -67,8 +96,8 @@ static inline bool IsDataAccessViolation(const EXCEPTION_RECORD& Record) {
   return Record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Record.ExceptionInformation[0] != EXCEPTION_EXECUTE_FAULT;
 }
 
-template<typename TReg>
-static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
+template<typename TMutex, typename TReg>
+static inline EXCEPTION_RECORD HandleGuestException(TMutex& ThreadCreationMutex, FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
                                                     const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx, BOOL& FirstChance) {
   EXCEPTION_RECORD Dst = Src;
   Dst.ExceptionAddress = reinterpret_cast<void*>(Rip);
@@ -126,7 +155,7 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
           return Dst;
         default: LogMan::Msg::EFmt("Unknown interrupt: 0x{:X}", Fault.err_code >> 3); break;
         }
-      } else if (IsSegmentLoad<TReg>(Rip)) {
+      } else if (IsSegmentLoad<TReg>(ThreadCreationMutex, Rip)) {
         // As on Windows, a #GP that is not from a privileged instruction, here from the segment checks of a segment
         // register load, is an access violation at an unknown address.
         Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;

@@ -271,6 +271,15 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
   }(FaultAddress);
 
   if (NeedsInvalidate) {
+    // A page that can't be read isn't one FEX trapped, whatever the intervals say. The faulting thread may be a compile
+    // holding the code invalidation mutex shared, so it must not go on to wait for it exclusively. A writable page is
+    // fine: another thread racing on the same page may have untrapped it already.
+    MEMORY_BASIC_INFORMATION Info;
+    if (NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(FaultAddress), MemoryBasicInformation, &Info, sizeof(Info), nullptr) ||
+        Info.State != MEM_COMMIT || !ProtIsReadable(Info.Protect) || (Info.Protect & PAGE_GUARD)) {
+      return false;
+    }
+
     // IntervalsLock cannot be held during invalidation
     {
       std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());

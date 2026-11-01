@@ -125,6 +125,7 @@ struct FrontendThreadData {
   bool NotifyEnteredSyscallCallback {};
   // Set from the first to the second notification around a syscall that takes code away, see NotifyAroundSyscall
   bool HoldsCodeLock {};
+  FEX::Windows::InvalidationTracker::FetchRetry LastFetchRetry {};
   CHPE_V2_CPU_AREA_INFO CpuArea {};
   // The guest's FPCR rounding mode and flush to zero when the thread last left the JIT, with the x87 control word and
   // MXCSR at that time, see Context::RestoreGuestFPCR.
@@ -1333,6 +1334,19 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   BOOL FirstChance = TRUE;
   EXCEPTION_RECORD GuestException =
     FEX::Windows::HandleGuestException(Fault, *Exception, WowContext->Eip, WowContext->Eax, WowContext->Ecx, FirstChance);
+  const bool Retry = FEX::Windows::ApplyFetchFault(GuestException, [Thread](uint64_t Address) {
+    std::scoped_lock Lock(ThreadCreationMutex);
+    return InvalidationTracker->HandleFetchFault(Address, GetFrontendThreadData(Thread)->LastFetchRetry);
+  });
+  if (Retry) {
+    // The thread state is in the frame, so this only has to get back into the dispatcher, as for a suspend. The instruction
+    // had its single step already: as from a context a handler continues with, TF comes back blocked for it.
+    CTX->SetFlagsFromCompactedEFLAGS(Thread, WowContext->EFlags);
+    Context->Pc = SignalDelegator->GetConfig().AbsoluteLoopTopAddressFillSRA;
+    Context->X1 = 0; // Clear ENTRY_FILL_SRA_SINGLE_INST_REG
+    return true;
+  }
+
   if (GuestException.ExceptionCode == EXCEPTION_SINGLE_STEP) {
     WowContext->EFlags &= ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC);
   }

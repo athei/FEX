@@ -362,7 +362,7 @@ DEF_OP(ValidateCode) {
     WorkingReg = TMP1;
   }
 
-  sub(ARMEmitter::Size::i32Bit, Dst, TMP1, CRC32Reg);
+  sub(ARMEmitter::Size::i32Bit, Dst, WorkingReg, CRC32Reg);
 
   ARMEmitter::ForwardLabel End;
   cbz_OrRestart(ARMEmitter::Size::i32Bit, Dst, &End);

@@ -753,6 +753,12 @@ void Arm64JITCore::EmitTFCheck() {
   and_(ARMEmitter::Size::i32Bit, TMP1, TMP1, ~(1 << 1));
   strb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
 
+  // A single step sets BS in DR6. B0 to B3 report the hardware breakpoints that hit, see BreakpointOp, and none did.
+  ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.Dr6));
+  and_(ARMEmitter::Size::i64Bit, TMP1, TMP1, ~0xFULL);
+  orr(ARMEmitter::Size::i64Bit, TMP1, TMP1, 1ULL << 14);
+  str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, State.Dr6));
+
   Core::CpuStateFrame::SynchronousFaultDataStruct State = {
     .FaultToTopAndGeneratedException = 1,
     .Signal = Core::FAULT_SIGTRAP,

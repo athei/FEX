@@ -1564,7 +1564,8 @@ private:
   void XRstorOpImpl(OpcodeArgs);
   void RestoreX87State(OpcodeArgs, Ref MemBase);
   void RestoreSSEState(Ref MemBase);
-  void RestoreMXCSRState(Ref MXCSR);
+  // ForStateRestore is false for LDMXCSR, which keeps the x87 control word out of FPCR.
+  void RestoreMXCSRState(Ref MXCSR, bool ForStateRestore = true);
   void RestoreAVXState(Ref MemBase);
   void DefaultX87State(OpcodeArgs);
   void DefaultSSEState();

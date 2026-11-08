@@ -221,7 +221,9 @@
       },
 
       "SetRoundingMode GPR:$RoundMode, i1:$SetDAZ, GPR:$MXCSR": {
-        "Desc": ["Sets the current rounding mode options for the thread"
+        "Desc": ["Sets the current rounding mode options for the thread",
+                 "RoundMode holds the x86 rounding control in bits 0 and 1 and, with SetDAZ, FTZ in bit 2.",
+                 "SetDAZ marks an MXCSR write: only then are FTZ and DAZ (MXCSR bit 6) applied, an x87 write sets the rounding mode alone."
                 ],
         "HasSideEffects": true
       },

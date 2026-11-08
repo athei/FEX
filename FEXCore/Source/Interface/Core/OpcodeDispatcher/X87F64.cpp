@@ -32,7 +32,7 @@ void OpDispatchBuilder::X87LDENVF64(OpcodeArgs) {
   auto NewFCW = _LoadMemGPR(OpSize::i16Bit, Mem, OpSize::i16Bit);
   // ignore the rounding precision, we're always 64-bit in F64.
   // extract rounding mode
-  Ref roundingMode = _Bfe(OpSize::i32Bit, 3, 10, NewFCW);
+  Ref roundingMode = _Bfe(OpSize::i32Bit, 2, 10, NewFCW);
   _SetRoundingMode(roundingMode, false, roundingMode);
   _StoreContextGPR(OpSize::i16Bit, NewFCW, offsetof(FEXCore::Core::CPUState, FCW));
 
@@ -51,7 +51,7 @@ void OpDispatchBuilder::X87FLDCWF64(OpcodeArgs) {
   Ref NewFCW = LoadSourceGPR(Op, Op->Src[0], Op->Flags);
   // ignore the rounding precision, we're always 64-bit in F64.
   // extract rounding mode
-  Ref roundingMode = _Bfe(OpSize::i32Bit, 3, 10, NewFCW);
+  Ref roundingMode = _Bfe(OpSize::i32Bit, 2, 10, NewFCW);
   _SetRoundingMode(roundingMode, false, roundingMode);
   _StoreContextGPR(OpSize::i16Bit, NewFCW, offsetof(FEXCore::Core::CPUState, FCW));
 }

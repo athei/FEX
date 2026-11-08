@@ -1481,19 +1481,17 @@
       ]
     },
     "fldenv [rax]": {
-      "ExpectedInstructionCount": 33,
+      "ExpectedInstructionCount": 31,
       "Comment": [
         "0xd9 !11b /4"
       ],
       "ExpectedArm64ASM": [
         "ldrh w20, [x4]",
-        "ubfx w21, w20, #10, #3",
+        "ubfx w21, w20, #10, #2",
         "rbit w1, w21",
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "strh w20, [x28, #1200]",
         "ldr w20, [x4, #4]",
@@ -1522,19 +1520,17 @@
       ]
     },
     "fldcw [rax]": {
-      "ExpectedInstructionCount": 10,
+      "ExpectedInstructionCount": 8,
       "Comment": [
         "0xd9 !11b /5"
       ],
       "ExpectedArm64ASM": [
         "ldrh w20, [x4]",
-        "ubfx w21, w20, #10, #3",
+        "ubfx w21, w20, #10, #2",
         "rbit w1, w21",
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "strh w20, [x28, #1200]"
       ]
@@ -4276,7 +4272,7 @@
       ]
     },
     "fninit": {
-      "ExpectedInstructionCount": 18,
+      "ExpectedInstructionCount": 16,
       "Comment": [
         "0xdb 11b 0xe3 /4"
       ],
@@ -4286,8 +4282,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x20, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "mov w20, #0x37f",
         "strh w20, [x28, #1200]",
@@ -5618,7 +5612,7 @@
       ]
     },
     "frstor [rax]": {
-      "ExpectedInstructionCount": 143,
+      "ExpectedInstructionCount": 158,
       "Comment": [
         "0xdd !11b /4"
       ],
@@ -5631,8 +5625,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x20, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "ldr w20, [x4, #4]",
         "ubfx w21, w20, #11, #3",
@@ -5672,6 +5664,9 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d3, d0",
+        "movi v4.2d, #0x0",
+        "add x0, x28, x21, lsl #4",
+        "str d4, [x0, #1064]",
         "add x0, x28, x21, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w21, #0x1 (1)",
@@ -5686,6 +5681,8 @@
         "ldr x30, [sp], #16",
         "fmov d3, d0",
         "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
+        "add x0, x28, x20, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
         "and w20, w20, #0x7",
@@ -5698,6 +5695,8 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d3, d0",
+        "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
         "add x0, x28, x20, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
@@ -5712,6 +5711,8 @@
         "ldr x30, [sp], #16",
         "fmov d3, d0",
         "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
+        "add x0, x28, x20, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
         "and w20, w20, #0x7",
@@ -5724,6 +5725,8 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d3, d0",
+        "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
         "add x0, x28, x20, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
@@ -5738,6 +5741,8 @@
         "ldr x30, [sp], #16",
         "fmov d3, d0",
         "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
+        "add x0, x28, x20, lsl #4",
         "str d3, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
         "and w20, w20, #0x7",
@@ -5750,6 +5755,8 @@
         "blr x0",
         "ldr x30, [sp], #16",
         "fmov d2, d0",
+        "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
         "add x0, x28, x20, lsl #4",
         "str d2, [x0, #1056]",
         "add w20, w20, #0x1 (1)",
@@ -5765,11 +5772,13 @@
         "ldr x30, [sp], #16",
         "fmov d2, d0",
         "add x0, x28, x20, lsl #4",
+        "str d4, [x0, #1064]",
+        "add x0, x28, x20, lsl #4",
         "str d2, [x0, #1056]"
       ]
     },
     "fnsave [rax]": {
-      "ExpectedInstructionCount": 145,
+      "ExpectedInstructionCount": 143,
       "Comment": [
         "0xdd !11b /6"
       ],
@@ -5906,8 +5915,6 @@
         "lsr w1, w1, #30",
         "mrs x0, fpcr",
         "bfi x0, x1, #22, #2",
-        "lsr x1, x21, #2",
-        "bfi x0, x1, #24, #1",
         "msr fpcr, x0",
         "mov w20, #0x37f",
         "strh w20, [x28, #1200]",

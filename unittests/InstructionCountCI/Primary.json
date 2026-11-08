@@ -10,7 +10,7 @@
       "FLAGM2",
       "MOPS"
     ],
-    "BinaryCacheVersion": 42
+    "BinaryCacheVersion": 52
   },
   "Instructions": {
     "add bl, cl": {

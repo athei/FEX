@@ -11,7 +11,7 @@
       "SVE256",
       "AFP"
     ],
-    "BinaryCacheVersion": 43
+    "BinaryCacheVersion": 56
   },
   "Instructions": {
     "sgdt [rax]": {

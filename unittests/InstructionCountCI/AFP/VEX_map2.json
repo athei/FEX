@@ -14,7 +14,7 @@
       "I8MM",
       "DOTPROD"
     ],
-    "BinaryCacheVersion": 43
+    "BinaryCacheVersion": 56
   },
   "Instructions": {
     "db 0xc4, 0xe2, 0x7a, 0x72, 0xd4 ; {vex} vcvtneps2bf16 xmm2, xmm4": {

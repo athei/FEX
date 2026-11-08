@@ -87,6 +87,58 @@ private:
 
   ARMEmitter::BiDirectionalLabel* PendingTargetLabel {};
   ARMEmitter::BiDirectionalLabel* PendingCallReturnTargetLabel {};
+
+  // Reduced precision x87: a block with X87PC ops is emitted once for each
+  // of these, and checks the FCW on entry to pick one, so none pays for a
+  // check per x87 operation.
+  enum class X87PCCopy {
+    // 53-bit and 64-bit precision: the ops do what the 64-bit ops did before.
+    Precision53,
+    // 24-bit precision: dual values are 32-bit floats and the ops work on
+    // them. Live-in values must be 32-bit floats, see X87PCCheckLiveIns.
+    Precision24,
+    // 24-bit precision with a live-in value that isn't a 32-bit float. Dual
+    // values are 64-bit floats, and results are rounded to 32 bits and
+    // converted back.
+    Precision24Wide,
+  };
+  X87PCCopy EmitX87PCCopy {};
+  // The start of the Precision24Wide copy of the block being emitted.
+  ARMEmitter::ForwardLabel* X87PCWideLabel {};
+  // X87PCCheckLiveIns branches to code after the Precision24 copy for the
+  // rare live-in value that needs bits 64-95 written first, which comes back
+  // to the label after the check.
+  ARMEmitter::ForwardLabel* X87PCRepairLabel {};
+  ARMEmitter::BackwardLabel* X87PCRepairDoneLabel {};
+  uint8_t X87PCRepairMask {};
+  void EmitX87PCRepair();
+  // The start of the copy being emitted, after the check of the FCW, for the
+  // block with ID X87PCBlockID. A jump from a block to itself goes there: an
+  // instruction that changes the FCW always ends its block with a jump to a
+  // new one, so a block that jumps to itself doesn't change it. Copies are
+  // only left at block exits, and the dispatcher, which a changed FCW from
+  // outside comes in through, enters at the check.
+  ARMEmitter::BiDirectionalLabel* X87PCCopyStart {};
+  uint32_t X87PCBlockID {};
+  // Past X87PCCheckLiveIns in the Precision24 copy, see its LoopSafe.
+  ARMEmitter::BiDirectionalLabel* X87PCAfterCheckLabel {};
+  // The 64-bit path of an X87PCBinop in Precision24 whose 64-bit operand
+  // isn't an exact 32-bit float, emitted after the last block, see
+  // X87PCBinop.
+  struct X87PCWideBinop {
+    ARMEmitter::ForwardLabel Entry;
+    ARMEmitter::BackwardLabel Return;
+    uint8_t Op;
+    uint8_t SingleMask;
+    ARMEmitter::VRegister Dst;
+    ARMEmitter::VRegister Src1;
+    ARMEmitter::VRegister Src2;
+  };
+  fextl::vector<X87PCWideBinop> X87PCWideBinops;
+  void EmitX87PCWideBinops();
+  void EmitX87PCWideBinop(uint8_t Op, uint8_t SingleMask, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1, ARMEmitter::VRegister Src2);
+  void EmitX87PCBinop(uint8_t Op, ARMEmitter::ScalarRegSize Size, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1, ARMEmitter::VRegister Src2);
+
   FEXCore::Context::ContextImpl* CTX {};
   const FEXCore::IR::IRListView* IR {};
   uint64_t Entry {};
@@ -96,6 +148,11 @@ private:
 
   ARMEmitter::BiDirectionalLabel* JumpTarget(IR::OrderedNodeWrapper Node) {
     auto Block = IR->GetOp<IR::IROp_CodeBlock>(Node);
+    if (X87PCCopyStart && Block->ID == X87PCBlockID) {
+      // A block with X87PC ops jumping to itself stays in its copy, see
+      // X87PCCopyStart.
+      return X87PCCopyStart;
+    }
     return &JumpTargets[Block->ID];
   }
 

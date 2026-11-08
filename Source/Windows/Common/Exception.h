@@ -57,6 +57,14 @@ static inline bool IsSegmentLoad(TReg Rip) {
   }
 }
 
+// Whether an access violation can be one of FEX's own faults. The call-ret stack, the lookup cache, the JIT guard page and
+// trapped pages only take data accesses, as guest code is compiled and never run in place. An execute fault is a failed
+// guest fetch that FEX raised, or on ARM64EC a native jump into memory that can't run. Handling either as one of these
+// would resume at the same instruction, to fault again.
+static inline bool IsDataAccessViolation(const EXCEPTION_RECORD& Record) {
+  return Record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Record.ExceptionInformation[0] != EXCEPTION_EXECUTE_FAULT;
+}
+
 template<typename TReg>
 static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame::SynchronousFaultDataStruct& Fault,
                                                     const EXCEPTION_RECORD& Src, TReg& Rip, TReg Rax, TReg Cx, BOOL& FirstChance) {

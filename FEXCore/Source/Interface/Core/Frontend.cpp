@@ -1117,6 +1117,10 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
     if (HitNonExecutableRange) {
+      // ReadByte and ReadData stop at the first byte they can't fetch, so InstructionSize is its offset. InstSize is only
+      // set once the instruction decoded, and the zeros read in place of that byte can make it invalid before. The length
+      // limit is not a fetch failure and is reported at the start of the instruction.
+      DecodeInst->InstSize = InstructionSize == MAX_INST_SIZE ? 0 : InstructionSize;
       return DecodeInst->InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST : DecodedBlockStatus::NOEXEC_INST;
     }
 

@@ -268,6 +268,7 @@ static constexpr FlagInfo ClassifyConst(IROps Op) {
   case OP_SUBNZCV:
   case OP_TESTNZ:
   case OP_FCMP:
+  case OP_X87PCCMP:
   case OP_STORENZCV:
     return FlagInfo::Pack({
       .Write = FLAG_NZCV,

@@ -30,7 +30,8 @@ void OpDispatchBuilder::X87LDENVF64(OpcodeArgs) {
   Ref Mem = MakeSegmentAddress(Op, Op->Src[0]);
 
   auto NewFCW = _LoadMemGPR(OpSize::i16Bit, Mem, OpSize::i16Bit);
-  // ignore the rounding precision, we're always 64-bit in F64.
+  // The values are 64-bit floats. The JIT applies 24-bit precision control
+  // to them when the block is entered, see X87ControlWordChanged.
   // extract rounding mode
   Ref roundingMode = _Bfe(OpSize::i32Bit, 2, 10, NewFCW);
   _SetRoundingMode(roundingMode, false, roundingMode);
@@ -43,17 +44,22 @@ void OpDispatchBuilder::X87LDENVF64(OpcodeArgs) {
     // FTW
     SetX87FTW(_LoadMemGPR(Size, Mem, Constant(IR::OpSizeToSize(Size) * 2), Size, MemOffsetType::SXTX, 1));
   }
+
+  X87ControlWordChanged();
 }
 
 void OpDispatchBuilder::X87FLDCWF64(OpcodeArgs) {
   _StackForceSlow();
 
   Ref NewFCW = LoadSourceGPR(Op, Op->Src[0], Op->Flags);
-  // ignore the rounding precision, we're always 64-bit in F64.
+  // The values are 64-bit floats. The JIT applies 24-bit precision control
+  // to them when the block is entered, see X87ControlWordChanged.
   // extract rounding mode
   Ref roundingMode = _Bfe(OpSize::i32Bit, 2, 10, NewFCW);
   _SetRoundingMode(roundingMode, false, roundingMode);
   _StoreContextGPR(OpSize::i16Bit, NewFCW, offsetof(FEXCore::Core::CPUState, FCW));
+
+  X87ControlWordChanged();
 }
 
 // F64 ops

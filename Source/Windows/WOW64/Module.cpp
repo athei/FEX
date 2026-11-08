@@ -1245,7 +1245,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   auto Thread = GetTLS().ThreadState();
   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedSignalTime);
 
-  if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+  if (FEX::Windows::IsDataAccessViolation(*Exception)) {
     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
     // A fault outside of the JIT, in a syscall that writes guest memory for one, takes FEX locks below
     ScopedSyscallCallback Callback;

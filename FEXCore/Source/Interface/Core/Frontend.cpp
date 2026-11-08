@@ -135,7 +135,12 @@ int32_t Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
   return Size;
 }
 
+// A byte that couldn't be fetched ends the reads of the instruction: another process can make the page readable again
+// before the next read, which would then go on past that byte and move where the fetch fault is reported.
 uint8_t Decoder::ReadByte() {
+  if (HitNonExecutableRange) {
+    return 0;
+  }
   std::optional<uint8_t> Byte = PeekByte(0);
   if (!Byte || InstructionSize == MAX_INST_SIZE) {
     HitNonExecutableRange = true;
@@ -164,11 +169,11 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize);
   LastFieldReadOffset = (uint8_t)InstructionSize;
   LastFieldReadSize = Size;
-  auto ReadableSize = CheckRangeExecutable(Address, Size);
+  // See ReadByte
+  auto ReadableSize = HitNonExecutableRange ? 0 : CheckRangeExecutable(Address, Size);
   if (ReadableSize == Size) {
     std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
   } else {
-    HitNonExecutableRange = true;
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
     Res = 0;
   }
@@ -182,6 +187,10 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
 #else
   SkipBytes(std::abs(ReadableSize));
 #endif
+  // Only once the readable bytes are skipped, as ReadByte reads nothing more after it
+  if (ReadableSize != Size) {
+    HitNonExecutableRange = true;
+  }
 
   if (Relocations) {
     uint32_t SectionOffset = static_cast<uint32_t>(Address - SectionMinAddress);
@@ -1117,6 +1126,10 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
     if (HitNonExecutableRange) {
+      // ReadByte and ReadData stop at the first byte they can't fetch, so InstructionSize is its offset. InstSize is only
+      // set once the instruction decoded, and the zeros read in place of that byte can make it invalid before. The length
+      // limit is not a fetch failure and is reported at the start of the instruction.
+      DecodeInst->InstSize = InstructionSize == MAX_INST_SIZE ? 0 : InstructionSize;
       return DecodeInst->InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST : DecodedBlockStatus::NOEXEC_INST;
     }
 

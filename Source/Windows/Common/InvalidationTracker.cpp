@@ -342,6 +342,22 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
   InvalidateIntervalInternal(AlignedBase, AlignedSize, CodeLockHeld);
 }
 
+void InvalidationTracker::HandleMemoryFreeNotification(uint64_t Address, uint64_t Size, bool CodeLockHeld) {
+  // A release reports what it freed, but Wine reports no size for a decommit without one, which decommits the whole
+  // allocation from its base. The allocation is still reserved, so its regions are walked to its end.
+  if (Address && !Size) {
+    MEMORY_BASIC_INFORMATION Info;
+    uint64_t End = Address;
+    while (!NtQueryVirtualMemory(NtCurrentProcess(), reinterpret_cast<void*>(End), MemoryBasicInformation, &Info, sizeof(Info), nullptr) &&
+           Info.State != MEM_FREE && reinterpret_cast<uint64_t>(Info.AllocationBase) == Address) {
+      End = reinterpret_cast<uint64_t>(Info.BaseAddress) + Info.RegionSize;
+    }
+    Size = End - Address;
+  }
+
+  InvalidateAlignedInterval(Address, Size, true, CodeLockHeld);
+}
+
 bool InvalidationTracker::OverlapsExecutableInterval(uint64_t Address, uint64_t Size) {
   const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
   const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;

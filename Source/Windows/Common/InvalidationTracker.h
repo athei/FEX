@@ -39,6 +39,8 @@ public:
   // InvalidateContainingSection before it. Ends the range that call kept out of the intervals, if it found a section.
   void FinishSectionUnmap();
   void InvalidateAlignedInterval(uint64_t Address, uint64_t Size, bool Free, bool CodeLockHeld = false);
+  // Called after a successful free syscall, with the range it reported
+  void HandleMemoryFreeNotification(uint64_t Address, uint64_t Size, bool CodeLockHeld);
 
   // Whether a syscall giving the range the protection Prot takes code away, in which case the caller must hold the code
   // invalidation mutex from before the syscall until its intervals are updated after it. A compile reading a page that

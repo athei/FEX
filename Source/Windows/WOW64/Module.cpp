@@ -1417,7 +1417,7 @@ void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL Afte
     After, [&] { return InvalidationTracker->FreeTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size)); },
     [&](bool CodeLockHeld) {
       if (!Status) {
-        InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true, CodeLockHeld);
+        InvalidationTracker->HandleMemoryFreeNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), CodeLockHeld);
       }
     });
 }

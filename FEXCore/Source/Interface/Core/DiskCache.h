@@ -120,6 +120,10 @@ namespace DiskCache {
     std::span<const uint64_t> GuestPages;
     std::span<uint64_t> EntryPointRIPs;
     std::span<const uint32_t> EntryPointHostOffsets;
+    // The guest's code from the block's GuestRIP as Lookup copied it, which the hit was checked against and relocated
+    // with, and whether it is in writable memory, see GuestCodeUnchanged
+    fextl::vector<uint8_t> GuestCode;
+    bool Writable {};
 
     // the spans above point to memory owned by the Blob vec, so it's important this can't be copied
     CodeHitData() = default;
@@ -199,6 +203,9 @@ namespace DiskCache {
     bool Store(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region, uint64_t GuestRIP, uint64_t GuestCodeKey,
                std::span<const uint8_t> GuestCode, const CPU::CPUBackend::CompiledCode& CompiledCode,
                std::span<const FEXCore::CPU::Relocation> Relocations, const Frontend::Decoder::DecodedBlockInformation* DecodedBlockInfo);
+    // Whether the guest's code at GuestRIP is still Hit.GuestCode, for a hit in writable memory once its pages are
+    // trapped, as Decoder::WritableCodeUnchanged does for a compile
+    bool GuestCodeUnchanged(uint64_t GuestRIP, const CodeHitData& Hit) const;
 
     bool IsWritingDiskCache() const {
       return WritingDiskCache;

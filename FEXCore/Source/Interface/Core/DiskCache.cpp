@@ -610,6 +610,9 @@ namespace DiskCache {
       MakeLookupKey(Thread, *GuestCodeKey, RangeInfo.Writable, GuestRIP == CTX->GetMonoBackPatcherBlock().load(std::memory_order_relaxed));
 
     XXH128_hash_t LiveGuestHash;
+    // The guest's code from GuestRIP that LiveGuestHash was taken of. A hit is relocated with it and checked against it
+    // once its pages are trapped, so no write after the copy is lost, see GuestCodeUnchanged.
+    fextl::vector<uint8_t> LiveGuestCode;
     uint64_t LastFootprintHashed = 0;
     bool FirstHash = true; // 0 is probably a valid footprint hash so we need an extra bit there
     bool TriedMainEntry = false;
@@ -709,11 +712,13 @@ namespace DiskCache {
       {
         IndexEntry& Entry = *EntryUnderReview;
         // only renew the hash if the candidate footprint is different than previous
-        if (FirstHash || LastFootprintHashed != CurrentFootprint) {
+        if (FirstHash || LastFootprintHashed != CurrentFootprint || LiveGuestCode.size() != Entry.GuestSize) {
+          LiveGuestCode.resize(Entry.GuestSize);
+          memcpy(LiveGuestCode.data(), reinterpret_cast<const void*>(GuestRIP), Entry.GuestSize);
           XXH3_state_t HashState;
           XXH3_128bits_reset(&HashState);
           for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
-            XXH3_128bits_update(&HashState, reinterpret_cast<uint8_t*>(GuestRIP) + Entry.GuestExtents[i], Entry.GuestExtents[i + 1]);
+            XXH3_128bits_update(&HashState, LiveGuestCode.data() + Entry.GuestExtents[i], Entry.GuestExtents[i + 1]);
           }
           LiveGuestHash = XXH3_128bits_digest(&HashState);
           LastFootprintHashed = CurrentFootprint;
@@ -727,7 +732,7 @@ namespace DiskCache {
           fextl::vector<uint8_t> GuestCode(Entry.GuestSize);
           if (Entry.Size >= Entry.GuestSize && Entry.DB && Entry.DB->ReadCacheBlob(Entry.Offset + Entry.Size - Entry.GuestSize, GuestCode)) {
             const uint8_t* CachedGuest = GuestCode.data();
-            const uint8_t* LiveGuest = reinterpret_cast<const uint8_t*>(GuestRIP);
+            const uint8_t* LiveGuest = LiveGuestCode.data();
             uint64_t DiffCount = 0;
             uint64_t DiffOffset = 0;
             for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
@@ -750,7 +755,7 @@ namespace DiskCache {
             }
             if (DiffCount) {
               uint64_t DiffStart = DiffOffset >= 8 ? DiffOffset - 8 : 0;
-              uint64_t DiffContextBytes = std::min<uint64_t>(16, Entry.GuestSize - DiffStart);
+              uint64_t DiffContextBytes = std::min<uint64_t>(16, std::min<uint64_t>(Entry.GuestSize, LiveGuestCode.size()) - DiffStart);
               auto LiveDump = fmt::join(std::span<const uint8_t> {LiveGuest + DiffStart, DiffContextBytes}, " ");
               auto CacheDump = fmt::join(std::span<const uint8_t> {CachedGuest + DiffStart, DiffContextBytes}, " ");
               auto KeyPrefix = (Region && Region->FileStartVA) ? "file" : "anon";
@@ -862,11 +867,17 @@ namespace DiskCache {
       EntryPointRip += GuestRIP;
     }
 
-    if (!CTX->CodeCache.ApplyPackedCodeRelocations(GuestRIP, std::as_writable_bytes(HitData.HostCode), SmallRelocs, ThunkRelocs)) {
+    if (!CTX->CodeCache.ApplyPackedCodeRelocations(GuestRIP, std::as_writable_bytes(HitData.HostCode), SmallRelocs, ThunkRelocs, LiveGuestCode)) {
       return std::nullopt;
     }
 
+    HitData.GuestCode = std::move(LiveGuestCode);
+    HitData.Writable = RangeInfo.Writable;
     return HitData;
+  }
+
+  bool DiskCache::GuestCodeUnchanged(uint64_t GuestRIP, const CodeHitData& Hit) const {
+    return memcmp(reinterpret_cast<const void*>(GuestRIP), Hit.GuestCode.data(), Hit.GuestCode.size()) == 0;
   }
 
   void DiskCache::Validate(uint64_t GuestCodeKey, const CodeHitData& Hit, const CPU::CPUBackend::CompiledCode& CompiledCode,

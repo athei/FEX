@@ -96,6 +96,10 @@ public:
     ExecutableRangeBase = ExecutableRangeEnd = 0;
   }
 
+  // Whether the instructions decoded from ranges the guest can write to are still in its memory as the decoder read
+  // them. The caller has their pages trapped for writes, so the answer holds until a write faults.
+  bool WritableCodeUnchanged() const;
+
 private:
   // To pass any information from instruction prefixes
   // down into the actual instruction handling machinery.
@@ -192,10 +196,22 @@ private:
 
   static constexpr size_t MAX_INST_SIZE = 15;
   uint8_t InstructionSize {};
-  // Contains the full decoded instruction, unless it is a `Thunk` instruction.
-  std::array<uint8_t, MAX_INST_SIZE> Instruction;
+  // Contains the full decoded instruction, unless it is a `Thunk` instruction. ReadData stores a whole uint64_t for a
+  // field that ends within MAX_INST_SIZE, which the room after that is for.
+  std::array<uint8_t, MAX_INST_SIZE + sizeof(uint64_t)> Instruction;
+  // Where the bytes in Instruction end that the decoder read from the guest's memory, if before InstructionSize
+  uint8_t UnfetchedOffset {};
   uint8_t LastEscapePrefix {};
   FEXCore::X86Tables::DecodedInst* DecodeInst;
+
+  // An instruction with a byte in a range the guest can write to, and what the decoder read of it. The decoder reads
+  // each byte it decodes from once, so the decoded instruction is a function of Bytes alone.
+  struct WritableInst {
+    uint64_t Address;
+    uint8_t Size;
+    std::array<uint8_t, MAX_INST_SIZE> Bytes;
+  };
+  fextl::vector<WritableInst> WritableInsts;
 
   // This is for multiblock data tracking
   uint64_t EntryPoint {};

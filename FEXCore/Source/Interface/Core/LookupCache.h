@@ -286,14 +286,17 @@ public:
   GuestToHostMap* Shared = nullptr;
 
   // Appends a list of Block {Address} to CodePages [Start, Start + Length)
-  // Returns true if new pages are marked as containing code
-  bool AddBlockExecutableRange(FEXCore::Core::InternalThreadState* Thread, auto& Addresses, uint64_t Start, uint64_t Length) {
+  // Calls OnNewPages if new pages are marked as containing code, with the lock still held: a thread that finds a page
+  // marked relies on what OnNewPages does for it, such as trapping writes to it, being done.
+  void AddBlockExecutableRange(FEXCore::Core::InternalThreadState* Thread, auto& Addresses, uint64_t Start, uint64_t Length, auto&& OnNewPages) {
     std::optional<FEXCore::SHMStats::AccumulationBlock<uint64_t>> LockTime(
       Thread->ThreadStats ? &Thread->ThreadStats->AccumulatedCacheWriteLockTime : nullptr);
     auto lk = Shared->AcquireWriteLock();
     LockTime.reset();
 
-    return Shared->AddBlockExecutableRange(Addresses, Start, Length, lk);
+    if (Shared->AddBlockExecutableRange(Addresses, Start, Length, lk)) {
+      OnNewPages();
+    }
   }
 
   // Adds to Guest -> Host code mapping

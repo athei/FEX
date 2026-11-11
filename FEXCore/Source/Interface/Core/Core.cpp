@@ -883,6 +883,20 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
   // Invalidate might take a unique lock on this, to guarantee that during invalidation no code gets compiled
   auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
 
+  // An attempt fails when the guest wrote to its code while it ran, and leaves the pages of that code trapped for
+  // writes. The lock stays held, so no write fault can make them writable again before the next attempt has read them,
+  // and that one only fails for code on other pages or for a page a guest syscall made writable meanwhile. The last
+  // attempt isn't checked: where the frontend traps nothing, a guest that keeps writing would fail every one.
+  static constexpr int MaxAttempts = 4;
+  for (int Attempt = 1;; ++Attempt) {
+    if (const auto HostCode = TryCompileBlock(Thread, GuestRIP, MaxInst, Attempt < MaxAttempts)) {
+      return *HostCode;
+    }
+  }
+}
+
+std::optional<uintptr_t>
+ContextImpl::TryCompileBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst, bool CheckWritableCode) {
   // Is the code in the cache?
   // The backends only check L1 and L2, not L3
   if (auto HostCode = Thread->LookupCache->FindBlock(Thread, GuestRIP)) {
@@ -901,9 +915,9 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
       auto LoadedCode = Thread->CPUBackend->LoadCachedCode(Hit->HostCode);
       if (LoadedCode.BlockBegin) {
         for (auto& CodePage : Hit->GuestPages) {
-          if (Thread->LookupCache->AddBlockExecutableRange(Thread, Hit->EntryPointRIPs, CodePage, FEXCore::Utils::FEX_PAGE_SIZE)) {
+          Thread->LookupCache->AddBlockExecutableRange(Thread, Hit->EntryPointRIPs, CodePage, FEXCore::Utils::FEX_PAGE_SIZE, [&] {
             SyscallHandler->MarkGuestExecutableRange(Thread, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
-          }
+          });
         }
 
         LOGMAN_THROW_A_FMT(Hit->EntryPointRIPs.size() == Hit->EntryPointHostOffsets.size(), "Mismatched Disk Cache entrypoint pairs!");
@@ -997,9 +1011,26 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     CodePages.reserve(BlockInfo->CodePages.size());
     CodePages.insert(CodePages.end(), BlockInfo->CodePages.begin(), BlockInfo->CodePages.end());
     for (auto CodePage : BlockInfo->CodePages) {
-      if (Thread->LookupCache->AddBlockExecutableRange(Thread, BlockInfo->EntryPoints, CodePage, FEXCore::Utils::FEX_PAGE_SIZE)) {
+      Thread->LookupCache->AddBlockExecutableRange(Thread, BlockInfo->EntryPoints, CodePage, FEXCore::Utils::FEX_PAGE_SIZE, [&] {
+        SyscallHandler->MarkGuestExecutableRange(Thread, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
+      });
+    }
+
+    // The frontend only traps writes to a page from here on. A write that got in after the decoder read the page took
+    // no fault, so nothing invalidates a block compiled from the bytes before it: check that the decoder's bytes are
+    // still there. A later write faults and waits for this compile before it invalidates the page.
+    if (CheckWritableCode && BlockInfo->InWritableRange && !Thread->FrontendDecoder->WritableCodeUnchanged()) {
+      // A page that held code already wasn't trapped above, and a guest syscall may have made it writable again, which
+      // invalidates it only after this compile. So trap them all for the next attempt.
+      for (auto CodePage : BlockInfo->CodePages) {
         SyscallHandler->MarkGuestExecutableRange(Thread, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
       }
+      if (!CodeCache.IsGeneratingCache) {
+        Thread->CPUBackend->ClearRelocations();
+      }
+      Thread->FrontendDecoder->ValidateDisownedOrFree();
+      Thread->OpDispatcher->ValidateDisownedOrFree();
+      return std::nullopt;
     }
   }
 

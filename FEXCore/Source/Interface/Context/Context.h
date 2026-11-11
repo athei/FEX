@@ -435,6 +435,10 @@ public:
   [[nodiscard]]
   CompileCodeResult CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst = 0);
   uintptr_t CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst = 0);
+  // One attempt of CompileBlock, with the code invalidation mutex held. With CheckWritableCode, it has no result if the
+  // guest wrote to the code while it was compiled.
+  std::optional<uintptr_t>
+  TryCompileBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst, bool CheckWritableCode);
   uintptr_t CompileSingleStep(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP);
 
   FEXCore::JITSymbols Symbols;

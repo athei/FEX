@@ -128,10 +128,11 @@ public:
   [[nodiscard]]
   bool ApplyCodeRelocations(uint64_t GuestDelta, std::span<std::byte> Code, std::span<const CPU::Relocation> Relocations, bool ForStorage);
 
-  // Same but on disk cache packed relocations
+  // Same but on disk cache packed relocations. The patchable ones take their fields from GuestCode, the guest's code from
+  // GuestDelta.
   [[nodiscard]]
   bool ApplyPackedCodeRelocations(uint64_t GuestDelta, std::span<std::byte> Code, std::span<const DiskCache::BlobSmallRelocation> SmallRelocs,
-                                  std::span<const DiskCache::BlobThunkRelocation> ThunkRelocs);
+                                  std::span<const DiskCache::BlobThunkRelocation> ThunkRelocs, std::span<const uint8_t> GuestCode);
 };
 
 class ContextImpl final : public FEXCore::Context::Context, public CPU::SharedCodeBufferManager {
@@ -435,6 +436,10 @@ public:
   [[nodiscard]]
   CompileCodeResult CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst = 0);
   uintptr_t CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP, uint64_t MaxInst = 0);
+  // One attempt of CompileBlock, with the code invalidation mutex held. With CheckWritableCode, it has no result if the
+  // guest wrote to the code while it was compiled.
+  std::optional<uintptr_t>
+  TryCompileBlock(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst, bool CheckWritableCode);
   uintptr_t CompileSingleStep(FEXCore::Core::CpuStateFrame* Frame, uint64_t GuestRIP);
 
   FEXCore::JITSymbols Symbols;

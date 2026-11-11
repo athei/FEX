@@ -15,6 +15,7 @@ $end_info$
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <utility>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/HLE/SyscallHandler.h>
@@ -167,7 +168,8 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
 
   uint64_t Res = 0;
   uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize);
-  LastFieldReadOffset = (uint8_t)InstructionSize;
+  const uint8_t FieldOffset = InstructionSize;
+  LastFieldReadOffset = FieldOffset;
   LastFieldReadSize = Size;
   // See ReadByte
   auto ReadableSize = HitNonExecutableRange ? 0 : CheckRangeExecutable(Address, Size);
@@ -190,6 +192,15 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   // Only once the readable bytes are skipped, as ReadByte reads nothing more after it
   if (ReadableSize != Size) {
     HitNonExecutableRange = true;
+  }
+
+  // WritableCodeUnchanged compares Instruction with the guest's memory, so it gets the bytes this read took, not a
+  // second read of them. A field that wasn't read, or that ends past the length limit, ends what is compared. All of
+  // Res is stored, which needs no call: the bytes past the field are zero, as they were, until a later read stores them.
+  if (ReadableSize == Size && size_t {FieldOffset} + Size <= MAX_INST_SIZE) [[likely]] {
+    std::memcpy(&Instruction[FieldOffset], &Res, sizeof(Res));
+  } else {
+    UnfetchedOffset = std::min(UnfetchedOffset, FieldOffset);
   }
 
   if (Relocations) {
@@ -685,6 +696,7 @@ Decoder::DecodedBlockStatus Decoder::NormalOp(const FEXCore::X86Tables::X86InstI
   } else {
     // All real x86 instructions have byte sizes that are 8-bytes or less.
     // Thunk instruction has an additional 32-byte SHA256 payload that needs to be accounted for.
+    UnfetchedOffset = std::min(UnfetchedOffset, InstructionSize);
     InstructionSize += Bytes;
     Bytes = 0;
   }
@@ -874,6 +886,7 @@ Decoder::DecodedBlockStatus Decoder::NormalOpHeader(const FEXCore::X86Tables::X8
 
 Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
   InstructionSize = 0;
+  UnfetchedOffset = MAX_INST_SIZE;
   LastEscapePrefix = 0;
   Instruction.fill(0);
 
@@ -1649,7 +1662,16 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
       }
 
       LastFieldReadSize = 0;
+      // Cleared so that it says after the decode whether this instruction has a byte in a writable range
+      const bool WasInWritableRange = std::exchange(BlockInfo.InWritableRange, false);
       BlockIt->BlockStatus = DecodeInstruction(OpAddress);
+      if (BlockInfo.InWritableRange) {
+        auto& Inst = WritableInsts.emplace_back();
+        Inst.Address = OpAddress;
+        Inst.Size = std::min(InstructionSize, UnfetchedOffset);
+        std::copy_n(Instruction.begin(), Inst.Bytes.size(), Inst.Bytes.begin());
+      }
+      BlockInfo.InWritableRange |= WasInWritableRange;
       if (HitBadRelocation) {
         BlockInfo.TotalInstructionCount = 0;
         BlockInfo.Blocks = {*BlockIt};
@@ -1785,6 +1807,12 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
   }
 }
 
+bool Decoder::WritableCodeUnchanged() const {
+  return std::ranges::all_of(WritableInsts, [](const WritableInst& Inst) {
+    return std::memcmp(reinterpret_cast<const void*>(Inst.Address), Inst.Bytes.data(), Inst.Size) == 0;
+  });
+}
+
 void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState* Thread, uint64_t PC, uint64_t MaxInst) {
   FEXCORE_PROFILE_SCOPED("DecodeInstructions");
   BlockInfo.TotalInstructionCount = 0;
@@ -1835,6 +1863,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
 
   BlockInfo.CodePages = {CurrentCodePage};
   BlockInfo.InWritableRange = false;
+  WritableInsts.clear();
 
   EntryBlock = true;
   FinalInstruction = false;

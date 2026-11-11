@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <git_version.h>
+#include <optional>
 
 #include <span>
 #include <xxhash.h>
@@ -537,9 +538,22 @@ ApplyRIPMoveRelocation(ContextImpl& CTX, uint64_t GuestRIP, uint8_t RegisterInde
   Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), Pointer, CPU::Arm64Emitter::PadType::DOPAD);
 }
 
-static inline int64_t ReadLiveGuestData(uint64_t SiteAddress, uint8_t ValueSize) {
+// The bytes of the site from the copy of the guest's code the disk cache checked the hit against, so that the hit is
+// built from one copy, see DiskCache::GuestCodeUnchanged. nullopt if the copy doesn't hold the site.
+static inline std::optional<std::span<const uint8_t>> GuestSiteBytes(std::span<const uint8_t> GuestCode, uint32_t SiteOffset, uint8_t ValueSize) {
+  if (uint64_t {SiteOffset} + ValueSize > GuestCode.size()) {
+    return std::nullopt;
+  }
+  return GuestCode.subspan(SiteOffset, ValueSize);
+}
+
+static inline std::optional<int64_t> ReadGuestData(std::span<const uint8_t> GuestCode, uint32_t SiteOffset, uint8_t ValueSize) {
   uint64_t Raw = 0;
-  memcpy(&Raw, reinterpret_cast<const void*>(SiteAddress), ValueSize);
+  const auto Site = GuestSiteBytes(GuestCode, SiteOffset, ValueSize);
+  if (!Site || ValueSize > sizeof(Raw)) {
+    return std::nullopt;
+  }
+  memcpy(&Raw, Site->data(), ValueSize);
   // manual sign-extension from guest live bytes
   if (ValueSize == 1) {
     return (int8_t)Raw;
@@ -552,28 +566,51 @@ static inline int64_t ReadLiveGuestData(uint64_t SiteAddress, uint8_t ValueSize)
   }
 }
 
-static inline void ApplyPatchableDataRelocation(uint64_t SiteAddress, uint8_t ValueSize, uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
-  Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), ReadLiveGuestData(SiteAddress, ValueSize),
-                       CPU::Arm64Emitter::PadType::DOPAD);
+static inline bool ApplyPatchableDataRelocation(std::span<const uint8_t> GuestCode, uint32_t SiteOffset, uint8_t ValueSize,
+                                                uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
+  const auto Value = ReadGuestData(GuestCode, SiteOffset, ValueSize);
+  if (!Value) {
+    return false;
+  }
+  Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), *Value, CPU::Arm64Emitter::PadType::DOPAD);
+  return true;
 }
 
-static inline void ApplyPatchableRIPLiteralRelocation(uint64_t SiteAddress, uint8_t ValueSize, CPU::Arm64Emitter& Emitter) {
-  Emitter.dc64(SiteAddress + ValueSize + ReadLiveGuestData(SiteAddress, ValueSize));
+static inline bool ApplyPatchableRIPLiteralRelocation(uint64_t GuestEntry, std::span<const uint8_t> GuestCode, uint32_t SiteOffset,
+                                                      uint8_t ValueSize, CPU::Arm64Emitter& Emitter) {
+  const auto Value = ReadGuestData(GuestCode, SiteOffset, ValueSize);
+  if (!Value) {
+    return false;
+  }
+  Emitter.dc64(GuestEntry + SiteOffset + ValueSize + *Value);
+  return true;
 }
 
-static inline void ApplyPatchableRIPMoveRelocation(uint64_t SiteAddress, uint8_t ValueSize, uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
-  const uint64_t Target = SiteAddress + ValueSize + ReadLiveGuestData(SiteAddress, ValueSize);
+static inline bool ApplyPatchableRIPMoveRelocation(uint64_t GuestEntry, std::span<const uint8_t> GuestCode, uint32_t SiteOffset,
+                                                   uint8_t ValueSize, uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
+  const auto Value = ReadGuestData(GuestCode, SiteOffset, ValueSize);
+  if (!Value) {
+    return false;
+  }
+  const uint64_t Target = GuestEntry + SiteOffset + ValueSize + *Value;
   Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), Target, CPU::Arm64Emitter::PadType::DOPAD);
+  return true;
 }
 
-static inline void ApplyPatchableCRCMoveRelocation(uint64_t SiteAddress, uint8_t ValueSize, uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
-  const uint64_t Target = FEXCore::Utils::crc32(reinterpret_cast<const uint8_t*>(SiteAddress), ValueSize);
+static inline bool ApplyPatchableCRCMoveRelocation(std::span<const uint8_t> GuestCode, uint32_t SiteOffset, uint8_t ValueSize,
+                                                   uint8_t RegisterIndex, CPU::Arm64Emitter& Emitter) {
+  const auto Site = GuestSiteBytes(GuestCode, SiteOffset, ValueSize);
+  if (!Site) {
+    return false;
+  }
+  const uint64_t Target = FEXCore::Utils::crc32(Site->data(), ValueSize);
   Emitter.LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Register(RegisterIndex), Target, CPU::Arm64Emitter::PadType::DOPAD);
+  return true;
 }
 
 bool CodeCache::ApplyPackedCodeRelocations(uint64_t GuestEntry, std::span<std::byte> Code,
                                            std::span<const DiskCache::BlobSmallRelocation> SmallRelocs,
-                                           std::span<const DiskCache::BlobThunkRelocation> ThunkRelocs) {
+                                           std::span<const DiskCache::BlobThunkRelocation> ThunkRelocs, std::span<const uint8_t> GuestCode) {
   CPU::Arm64Emitter Emitter(&CTX, Code.data(), Code.size_bytes());
   for (auto& Reloc : SmallRelocs) {
     LOGMAN_THROW_A_FMT(Reloc.Offset < Code.size_bytes(), "Invalid relocation offset");
@@ -592,22 +629,30 @@ bool CodeCache::ApplyPackedCodeRelocations(uint64_t GuestEntry, std::span<std::b
       break;
     }
     case FEXCore::CPU::RelocationTypes::RELOC_GUEST_PATCHABLE_DATA_MOVE: {
-      ApplyPatchableDataRelocation(GuestEntry + Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
-                                   Reloc.PatchableData.RegisterIndex, Emitter);
+      if (!ApplyPatchableDataRelocation(GuestCode, Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
+                                        Reloc.PatchableData.RegisterIndex, Emitter)) {
+        return false;
+      }
       break;
     }
     case FEXCore::CPU::RelocationTypes::RELOC_GUEST_PATCHABLE_RIP_LITERAL: {
-      ApplyPatchableRIPLiteralRelocation(GuestEntry + Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize, Emitter);
+      if (!ApplyPatchableRIPLiteralRelocation(GuestEntry, GuestCode, Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize, Emitter)) {
+        return false;
+      }
       break;
     }
     case FEXCore::CPU::RelocationTypes::RELOC_GUEST_PATCHABLE_RIP_MOVE: {
-      ApplyPatchableRIPMoveRelocation(GuestEntry + Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
-                                      Reloc.PatchableData.RegisterIndex, Emitter);
+      if (!ApplyPatchableRIPMoveRelocation(GuestEntry, GuestCode, Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
+                                           Reloc.PatchableData.RegisterIndex, Emitter)) {
+        return false;
+      }
       break;
     }
     case FEXCore::CPU::RelocationTypes::RELOC_GUEST_PATCHABLE_CRC_MOVE: {
-      ApplyPatchableCRCMoveRelocation(GuestEntry + Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
-                                      Reloc.PatchableData.RegisterIndex, Emitter);
+      if (!ApplyPatchableCRCMoveRelocation(GuestCode, Reloc.PatchableData.SiteOffset, Reloc.PatchableData.ValueSize,
+                                           Reloc.PatchableData.RegisterIndex, Emitter)) {
+        return false;
+      }
       break;
     }
     default: ERROR_AND_DIE_FMT("Unknown packed relocation type {}", ToUnderlying((CPU::RelocationTypes)Reloc.Type));

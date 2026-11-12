@@ -1260,6 +1260,11 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   auto* Context = Ptrs->ContextRecord;
   auto* Exception = Ptrs->ExceptionRecord;
   auto Thread = GetTLS().ThreadState();
+  // A thread that never ran BTCpuThreadInit, such as one Wine runs on its 64-bit context, has no state here, and its
+  // exceptions are not FEX's
+  if (!Thread) {
+    return false;
+  }
   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedSignalTime);
 
   if (FEX::Windows::IsDataAccessViolation(*Exception)) {
@@ -1287,29 +1292,27 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
       return true;
     }
 
-    if (Thread) {
-      std::scoped_lock Lock(ThreadCreationMutex);
-      FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
-      if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress)) {
-        if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
-            CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
-          Context::ReconstructThreadState(Context);
-          LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", Context->Pc,
-                            Thread->CurrentFrame->State.rip, FaultAddress);
+    std::scoped_lock Lock(ThreadCreationMutex);
+    FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
+    if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress)) {
+      if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
+          CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
+        Context::ReconstructThreadState(Context);
+        LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", Context->Pc,
+                          Thread->CurrentFrame->State.rip, FaultAddress);
 
-          // Adjust context to return to the dispatcher, reloading SRA from thread state
-          const auto& Config = SignalDelegator->GetConfig();
-          Context->Pc = Config.AbsoluteLoopTopAddressFillSRA;
-          Context->X1 = 1; // Set ENTRY_FILL_SRA_SINGLE_INST_REG to force a single step
-        } else {
-          LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", Context->Pc, FaultAddress);
-        }
-        return true;
+        // Adjust context to return to the dispatcher, reloading SRA from thread state
+        const auto& Config = SignalDelegator->GetConfig();
+        Context->Pc = Config.AbsoluteLoopTopAddressFillSRA;
+        Context->X1 = 1; // Set ENTRY_FILL_SRA_SINGLE_INST_REG to force a single step
+      } else {
+        LogMan::Msg::DFmt("Handled self-modifying code: pc: {:X} fault: {:X}", Context->Pc, FaultAddress);
       }
+      return true;
     }
   }
 
-  if (!Thread || !IsAddressInJit(Context->Pc)) {
+  if (!IsAddressInJit(Context->Pc)) {
     return false;
   }
 

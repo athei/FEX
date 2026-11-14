@@ -787,8 +787,9 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
   ECContext.X24 = 0;
   ECContext.X28 = 0;
 
-  // NZCV+SS will be converted into EFlags by ntdll, the rest are lost during exception handling.
-  // See HandleGuestException
+  // ntdll converts NZCV+SS into EFlags. Our Wine also converts the Cpsr bits below, which are RES0 in AArch64 and kept
+  // by its kernel side, into PF, AF and DF (eflags_to_cpsr in dlls/ntdll/unwind.h). The rest are lost during exception
+  // handling, see SyncThreadContext.
   uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   ECContext.Cpsr = 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)) ? (1U << 21) : 0;
@@ -796,6 +797,9 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC)) ? (1U << 29) : 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC)) ? (1U << 30) : 0;
   ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC)) ? (1U << 31) : 0;
+  ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_PF_RAW_LOC)) ? (1U << 14) : 0;
+  ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC)) ? (1U << 15) : 0;
+  ECContext.Cpsr |= (EFlags & (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC)) ? (1U << 5) : 0;
 
   ECContext.Fpcr = FPCR;
   ECContext.Fpsr = FPSR;
@@ -817,11 +821,14 @@ static ARM64_NT_CONTEXT StoreStateToPackedECContext(FEXCore::Core::InternalThrea
 static void RaiseException(FEXCore::Core::InternalThreadState* Thread, const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT& GuestContext) {
   auto& Fault = Thread->CurrentFrame->SynchronousFaultData;
 
-  // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
-  // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
-  // TODO: Can extend wine to support this by mapping the remaining EFlags into reserved cpsr members.
+  // X64 Windows runs the exception dispatcher and the handlers with TF, DF and AC clear, and restores the EFlags of the
+  // context when a handler continues it. GuestContext carries TF and DF (see StoreStateToPackedECContext), and the
+  // handlers run on the JIT state, so clear the two there. AC stays: the context cannot carry it back, and FEX does not
+  // check alignment.
+  static constexpr uint32_t DispatchClearedEFlags {(1U << FEXCore::X86State::RFLAG_TF_RAW_LOC) |
+                                                   (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC)};
   const uint32_t EFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
-  CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags & ~(1 << FEXCore::X86State::RFLAG_TF_RAW_LOC));
+  CTX->SetFlagsFromCompactedEFLAGS(Thread, EFlags & ~DispatchClearedEFlags);
 
   BOOL FirstChance = TRUE;
   EXCEPTION_RECORD GuestRec =
@@ -970,11 +977,13 @@ public:
 extern "C" void SyncThreadContext(CONTEXT* Context) {
   ProcessCrossProcessWork();
   auto* Thread = GetCPUArea().ThreadState();
-  // All other EFlags bits are lost when converting to/from an ARM64EC context, so merge them in from the current JIT state.
-  // This is advisable over dropping their values as thread suspend/resume uses this function, and that can happen at any point in guest code.
+  // All other EFlags bits than these (see StoreStateToPackedECContext) are lost when converting to/from an ARM64EC context,
+  // so merge them in from the current JIT state. This is advisable over dropping their values as thread suspend/resume
+  // uses this function, and that can happen at any point in guest code.
   static constexpr uint32_t ECValidEFlagsMask {(1U << FEXCore::X86State::RFLAG_OF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC) |
                                                (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC) |
-                                               (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC)};
+                                               (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_PF_RAW_LOC) |
+                                               (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC)};
 
   uint32_t StateEFlags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
   Context->EFlags = (Context->EFlags & ECValidEFlagsMask) | (StateEFlags & ~ECValidEFlagsMask);

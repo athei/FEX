@@ -467,6 +467,12 @@ bool InvalidationTracker::TrackExecutableMapping(uint64_t Address) {
 
   const auto Base = reinterpret_cast<uint64_t>(Info.BaseAddress);
   AddExecutableInterval({Base, Base + Info.RegionSize}, Info.Protect);
+  // A block on the page before a page of the range counts that page among its code pages, as the decoder adds the page of
+  // the longest instruction it could find, and outside the intervals that trapped nothing. The lookup cache only traps a
+  // page when it first holds code, so the range is trapped now.
+  if (ProtIsWritable(Info.Protect)) {
+    ProtectRWXIntervalsLocked(Base, Info.RegionSize, false);
+  }
   return true;
 }
 
@@ -647,8 +653,12 @@ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, uin
 }
 
 bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t Size, bool ForWriteLocked) {
-  const auto End = Address + Size;
   std::shared_lock Lock(IntervalsLock);
+  return ProtectRWXIntervalsLocked(Address, Size, ForWriteLocked);
+}
+
+bool InvalidationTracker::ProtectRWXIntervalsLocked(uint64_t Address, uint64_t Size, bool ForWriteLocked) {
+  const auto End = Address + Size;
 
   if (SMCDetectionDisabled) {
     return false;

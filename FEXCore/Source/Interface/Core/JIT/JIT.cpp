@@ -1065,6 +1065,12 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
       X87PCBlockID = BlockIROp->ID;
     }
 
+    // The guest instruction the block starts in, which is not the last one of
+    // the copy before for the code of a copy up to its first GuestOpcode. A
+    // block starts in the middle of an instruction after the ValidateCode of
+    // full SMC checks, for one.
+    const bool HasStartOpcode = !DebugData->GuestOpcodes.empty();
+    const auto StartOpcode = HasStartOpcode ? DebugData->GuestOpcodes.back().GuestEntryOffset : 0;
     EmitX87PCCopy = X87PCCopy::Precision53;
     while (true) {
       if (HasPrecisionControl) {
@@ -1074,6 +1080,9 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
         auto Start = &CopyStart[static_cast<int>(EmitX87PCCopy)];
         BindOrRestart(Start);
         X87PCCopyStart = Start;
+        if (EmitX87PCCopy != X87PCCopy::Precision53 && HasStartOpcode) {
+          DebugData->GuestOpcodes.push_back({StartOpcode, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
+        }
       }
 
       for (auto [CodeNode, IROp] : IR->GetCode(BlockNode)) {

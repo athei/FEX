@@ -876,7 +876,9 @@ static void RethrowGuestException(FEXCore::Core::InternalThreadState* Thread, co
   auto GuestContext = StoreStateToPackedECContext(Thread, HostContext.Fpcr, HostContext.Fpsr);
   LogMan::Msg::DFmt("pc: {:X} rip: {:X}", HostContext.Pc, GuestContext.Pc);
 
-  RaiseException(Thread, Rec, GuestContext);
+  EXCEPTION_RECORD GuestRec = Rec;
+  FEX::Windows::ApplyCodeValidationFault(*CTX, Thread, GuestRec, HostContext.Pc, GuestContext.Pc);
+  RaiseException(Thread, GuestRec, GuestContext);
 }
 
 [[noreturn]]

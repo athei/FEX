@@ -187,6 +187,33 @@ uint64_t ContextImpl::RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* T
   return Frame->State.rip;
 }
 
+bool ContextImpl::IsCodeValidationRead(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) const {
+  if (!IsAddressInCodeBuffer(Thread, HostPC)) {
+    return false;
+  }
+
+  // ValidateCode loads each part of the code into TMP3 with a post-indexed LDR, LDRH or LDRB from TMP2 and adds it to
+  // the CRC in TMP1 with a CRC32B, H, W or X right after. Nothing else in the JIT emits these CRC32s: the guest's CRC32
+  // is CRC32C, see DEF_OP(ValidateCode) and DEF_OP(CRC32).
+  const auto* Code = reinterpret_cast<const uint32_t*>(HostPC);
+  const uint32_t Load = Code[0];
+  const uint32_t CRC = Code[1];
+  constexpr uint32_t LoadPostIndexMask = 0x3fe00c00, LoadPostIndex = 0x38400400;
+  constexpr uint32_t CRC32Mask = 0x7fe0f000, CRC32 = 0x1ac04000;
+  const auto Rt = [](uint32_t Inst) {
+    return Inst & 0x1f;
+  };
+  const auto Rd = Rt;
+  const auto Rn = [](uint32_t Inst) {
+    return (Inst >> 5) & 0x1f;
+  };
+  const auto Rm = [](uint32_t Inst) {
+    return (Inst >> 16) & 0x1f;
+  };
+  return (Load & LoadPostIndexMask) == LoadPostIndex && Rt(Load) == CPU::TMP3.Idx() && Rn(Load) == CPU::TMP2.Idx() &&
+         (CRC & CRC32Mask) == CRC32 && Rm(CRC) == CPU::TMP3.Idx() && Rd(CRC) == CPU::TMP1.Idx();
+}
+
 uint32_t ContextImpl::ReconstructCompactedEFLAGS(FEXCore::Core::InternalThreadState* Thread, bool WasInJIT, const uint64_t* HostGPRs,
                                                  uint64_t PSTATE) {
   const auto Frame = Thread->CurrentFrame;
@@ -644,13 +671,16 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
         // context once this flush has written it back.
         Thread->OpDispatcher->FlushRegisterCache(true);
 
-        if (ExtendedDebugInfo || Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo)) {
+        // A decode error, a fetch fault at the first byte and an instruction past the 15-byte length limit have InstSize 0,
+        // as the length isn't known, which leaves no range to validate. A partial fetch fault keeps the bytes it could read.
+        const bool ValidatesCode = (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection) && DecodedInfo->InstSize;
+
+        // A fault in ValidateCode is the instruction's fetch fault, which needs its RIP, see IsCodeValidationRead
+        if (ExtendedDebugInfo || ValidatesCode || Thread->OpDispatcher->CanHaveSideEffects(TableInfo, DecodedInfo)) {
           Thread->OpDispatcher->_GuestOpcode(InstAddress - GuestRIP);
         }
 
-        // A decode error, a fetch fault at the first byte and an instruction past the 15-byte length limit have InstSize 0,
-        // as the length isn't known, which leaves no range to validate. A partial fetch fault keeps the bytes it could read.
-        if ((Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection) && DecodedInfo->InstSize) {
+        if (ValidatesCode) {
           auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 

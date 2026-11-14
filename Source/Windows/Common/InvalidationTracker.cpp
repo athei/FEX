@@ -54,9 +54,8 @@ bool InvalidationTracker::ProtIsEffectivelyExecutable(ULONG Prot) const {
 
 void InvalidationTracker::AddExecutableInterval(FEXCore::IntervalList<uint64_t>::Interval ProtInterval, ULONG Prot) {
   XIntervals.Insert(ProtInterval);
-  // A range made executable and read-only stays in RWXIntervals, so a write to it is still taken for SMC and made
-  // writable. While FEX traps writes to a range, VirtualProtect and VirtualQuery report PAGE_EXECUTE_READ for it, so
-  // a guest that saved that protection and restores it after patching still expects the range to be writable.
+  // Prot may be the protection of a trap, so a read-only one takes nothing out of RWXIntervals here, see
+  // HandleMemoryProtectionNotification
   if (ProtIsWritable(Prot)) {
     LogMan::Msg::DFmt("Add SMC interval: {:X} - {:X}", ProtInterval.Offset, ProtInterval.End);
     RWXIntervals.Insert(ProtInterval);
@@ -81,10 +80,26 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
 
     if (ProtIsEffectivelyExecutable(Prot)) {
       AddExecutableInterval(ProtInterval, Prot);
+      // Only a protect or commit of this process passes CodeLockHeld here. It holds ThreadCreationMutex from before its
+      // syscall, so no write fault made the range writable again since. A queued one of another process can come after
+      // such a fault, so it leaves the range in RWXIntervals.
+      if (!ProtIsWritable(Prot) && CodeLockHeld) {
+        // VirtualQuery reports PAGE_EXECUTE_READ for a page FEX trapped, so the guest may be restoring a protection it
+        // got there, which on Windows leaves the page writable. Only a page FEX never trapped is made read-only for it.
+        for (auto Begin = ProtInterval.Offset; Begin < ProtInterval.End;) {
+          const auto Query = TrappedIntervals.Query(Begin);
+          const auto End = Query.Size ? std::min<uint64_t>(ProtInterval.End, Begin + Query.Size) : ProtInterval.End;
+          if (!Query.Enclosed) {
+            RWXIntervals.Remove({Begin, End});
+          }
+          Begin = End;
+        }
+      }
       return true;
     } else if (XIntervals.Intersect(ProtInterval)) {
       XIntervals.Remove(ProtInterval);
       RWXIntervals.Remove(ProtInterval);
+      TrappedIntervals.Remove(ProtInterval);
       if (DEPDisabled) {
         DEPPromotedIntervals.Remove(ProtInterval);
       }
@@ -108,6 +123,10 @@ bool InvalidationTracker::ProtectTakesCodeAway(uint64_t Address, uint64_t Size, 
   }
 
   std::shared_lock Lock(IntervalsLock);
+  // Trapped pages are made writable again before the syscall, see UntrapForProtect
+  if (RWXIntervals.Intersect({AlignedBase, AlignedEnd})) {
+    return true;
+  }
   if (ProtIsEffectivelyExecutable(Prot)) {
     return false;
   }
@@ -130,6 +149,14 @@ bool InvalidationTracker::ProtectTakesCodeAway(uint64_t Address, uint64_t Size, 
     Base = reinterpret_cast<uint64_t>(Info.BaseAddress) + Info.RegionSize;
   }
   return false;
+}
+
+void InvalidationTracker::UntrapForProtect(uint64_t Address, uint64_t Size) {
+  const auto AlignedBase = Address & FEXCore::Utils::FEX_PAGE_MASK;
+  const auto AlignedEnd = (Address + Size + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+  if (AlignedEnd > AlignedBase) {
+    ProtectRWXIntervalsInternal(AlignedBase, AlignedEnd - AlignedBase, true);
+  }
 }
 
 bool InvalidationTracker::AllocTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Type, ULONG Prot) {
@@ -217,6 +244,7 @@ void InvalidationTracker::HandleProcessExecuteFlagsChange(ULONG Flags) {
     for (const auto& Interval : DEPPromotedIntervals) {
       XIntervals.Remove(Interval);
       RWXIntervals.Remove(Interval);
+      TrappedIntervals.Remove(Interval);
     }
     DEPPromotedIntervals.Clear();
   }
@@ -294,6 +322,7 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
     std::unique_lock Lock(IntervalsLock);
     XIntervals.Remove({SectionBase, SectionBase + SectionSize});
     RWXIntervals.Remove({SectionBase, SectionBase + SectionSize});
+    TrappedIntervals.Remove({SectionBase, SectionBase + SectionSize});
     ForgetFetchFaultPages(SectionBase, SectionBase + SectionSize);
     UnmappingSection = {SectionBase, SectionBase + SectionSize};
   }
@@ -336,6 +365,7 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
     }
     XIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
     RWXIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
+    TrappedIntervals.Remove({AlignedBase, AlignedBase + AlignedSize});
     ForgetFetchFaultPages(AlignedBase, AlignedBase + AlignedSize);
   }
 
@@ -686,6 +716,10 @@ bool InvalidationTracker::ProtectRWXIntervalsLocked(uint64_t Address, uint64_t S
                                ForWriteLocked ? GetUntrapProt(ProtectBase) : GetTrapProt(ProtectBase), &TmpProt);
       };
       const auto ChunkEnd = std::min(End, Address + Query.Size);
+      if (!ForWriteLocked) {
+        std::scoped_lock TrappedLock(TrappedIntervalsLock);
+        TrappedIntervals.Insert({Address & FEXCore::Utils::FEX_PAGE_MASK, ChunkEnd});
+      }
       if (ForWriteLocked || UntrackedWrites.empty()) {
         Protect(Address, ChunkEnd);
       } else {

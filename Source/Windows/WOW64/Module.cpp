@@ -336,16 +336,17 @@ void ProcessCrossProcessWork() {
 // first notification to the end of Work, which gets true for that, see InvalidationTracker::ProtectTakesCodeAway. wow64
 // only calls these hooks from its syscall thunks and FEX calls ntdll directly, so no compile is waited for by the thread
 // running it, and a suspend or termination of the thread waits for the end of the second one. That is not done for queued
-// items: the other process doesn't wait for this one, so it can't be held off by a lock here.
+// items: the other process doesn't wait for this one, so it can't be held off by a lock here. Returns whether the first
+// notification took the code invalidation mutex.
 template<typename TakesCodeAwayFunc, typename WorkFunc>
-void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc&& Work) {
+bool NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc&& Work) {
   auto* Data = GetCurrentFrontendThreadData();
   if (Data && Data->InCrossProcessWork) {
     if (After) {
       std::scoped_lock Lock(ThreadCreationMutex);
       Work(false);
     }
-    return;
+    return false;
   }
 
   if (!After) {
@@ -356,6 +357,7 @@ void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
     if (Data && TakesCodeAway()) {
       CTX->GetCodeInvalidationMutex().lock();
       Data->HoldsCodeLock = true;
+      return true;
     }
   } else {
     const bool CodeLockHeld = Data && std::exchange(Data->HoldsCodeLock, false);
@@ -368,6 +370,7 @@ void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
       LeaveSyscallCallback(std::exchange(Data->NotifyEnteredSyscallCallback, false));
     }
   }
+  return false;
 }
 
 uint64_t GetWowTEB(void* TEB) {
@@ -1397,7 +1400,7 @@ void BTCpuNotifyMemoryDirty(void* Address, SIZE_T Size) {
 }
 
 void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, ULONG Status) {
-  NotifyAroundSyscall(
+  const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->AllocTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Type, Prot); },
     [&](bool CodeLockHeld) {
@@ -1406,10 +1409,13 @@ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, 
         InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot, CodeLockHeld);
       }
     });
+  if (CodeLockTaken) {
+    InvalidationTracker->UntrapForProtect(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
+  }
 }
 
 void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, ULONG Status) {
-  NotifyAroundSyscall(
+  const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->ProtectTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt); },
     [&](bool CodeLockHeld) {
@@ -1418,6 +1424,9 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
                                                                 CodeLockHeld);
       }
     });
+  if (CodeLockTaken) {
+    InvalidationTracker->UntrapForProtect(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
+  }
 }
 
 void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, ULONG Status) {

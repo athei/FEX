@@ -2211,5 +2211,49 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
   return std::nullopt;
 }
 
+// x3 keeps Dst, so the end gets the count from the cursor in x0 wherever the copy stopped. A faulting post-indexed load
+// writes nothing back.
+__attribute__((naked)) size_t FaultSafeCopy(void* Dst, const void* Src, size_t Size) {
+  __asm volatile(R"(
+    mov x3, x0
+    b 2f
+  1:
+  .globl FEXCore_FaultSafeCopy_Read8
+  FEXCore_FaultSafeCopy_Read8:
+    ldr x4, [x1], #8
+    str x4, [x0], #8
+    sub x2, x2, #8
+  2:
+    cmp x2, #8
+    b.hs 1b
+    cbz x2, 4f
+  3:
+  .globl FEXCore_FaultSafeCopy_Read1
+  FEXCore_FaultSafeCopy_Read1:
+    ldrb w4, [x1], #1
+    strb w4, [x0], #1
+    subs x2, x2, #1
+    b.ne 3b
+  4:
+  .globl FEXCore_FaultSafeCopy_End
+  FEXCore_FaultSafeCopy_End:
+    sub x0, x0, x3
+    ret
+  )" ::
+                   : "memory");
+}
+
+extern "C" const uint32_t FEXCore_FaultSafeCopy_Read8[];
+extern "C" const uint32_t FEXCore_FaultSafeCopy_Read1[];
+extern "C" const uint32_t FEXCore_FaultSafeCopy_End[];
+
+uint64_t FaultSafeCopyResumePC(uint64_t ProgramCounter) {
+  if (ProgramCounter == reinterpret_cast<uint64_t>(FEXCore_FaultSafeCopy_Read8) ||
+      ProgramCounter == reinterpret_cast<uint64_t>(FEXCore_FaultSafeCopy_Read1)) {
+    return reinterpret_cast<uint64_t>(FEXCore_FaultSafeCopy_End);
+  }
+  return 0;
+}
+
 
 } // namespace FEXCore::ArchHelpers::Arm64

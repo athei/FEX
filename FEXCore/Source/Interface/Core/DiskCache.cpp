@@ -11,6 +11,7 @@
 #include <FEXCore/fextl/memory.h>
 #include <FEXCore/fextl/string.h>
 #include <FEXCore/HLE/SyscallHandler.h>
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/File.h>
 #include <FEXCore/Utils/FileUtils.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -558,6 +559,13 @@ namespace DiskCache {
     }
   };
 
+  // Another process can take guest code away at any moment, as it doesn't wait for the code invalidation mutex the
+  // compile holds, so the cache reads it as the decoder does, see Decoder::FetchInstBytes. Code that can't be read is a
+  // miss and isn't stored, and the compile then stops at it.
+  static bool CopyGuestCode(void* Dst, uint64_t Src, uint64_t Size) {
+    return FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Dst, reinterpret_cast<const void*>(Src), Size) == Size;
+  }
+
   std::optional<CodeHitData> DiskCache::Lookup(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region,
                                                uint64_t GuestRIP, std::optional<uint64_t>& GuestCodeKey) {
     if (!IsReadingDiskCache() || Paused.load(std::memory_order_acquire)) {
@@ -578,6 +586,15 @@ namespace DiskCache {
 
       XXH3_state_t HashState;
       XXH3_64bits_reset(&HashState);
+      fextl::vector<uint8_t> GuestBytes;
+      auto HashGuestCode = [&](uint64_t Start, uint64_t Size) {
+        GuestBytes.resize(Size);
+        if (!CopyGuestCode(GuestBytes.data(), Start, Size)) {
+          return false;
+        }
+        XXH3_64bits_update(&HashState, GuestBytes.data(), Size);
+        return true;
+      };
       for (auto& SubBlock : BlockInfo->Blocks) {
         if (SubBlock.BlockStatus != Frontend::Decoder::DecodedBlockStatus::SUCCESS) {
           return std::nullopt;
@@ -585,11 +602,13 @@ namespace DiskCache {
         uint64_t HashStart = SubBlock.Entry;
         // skip over masked in-block data and data/etc gaps between blocks
         for (auto& DataMask : SubBlock.DataMasks) {
-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), DataMask.FieldAddress - HashStart);
+          if (!HashGuestCode(HashStart, DataMask.FieldAddress - HashStart)) {
+            return std::nullopt;
+          }
           HashStart = DataMask.FieldAddress + DataMask.ValueSize;
         }
-        if (HashStart != SubBlock.Entry + SubBlock.Size) {
-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), SubBlock.Size - (HashStart - SubBlock.Entry));
+        if (HashStart != SubBlock.Entry + SubBlock.Size && !HashGuestCode(HashStart, SubBlock.Size - (HashStart - SubBlock.Entry))) {
+          return std::nullopt;
         }
       }
       GuestCodeKey = XXH3_64bits_digest(&HashState);
@@ -714,7 +733,9 @@ namespace DiskCache {
         // only renew the hash if the candidate footprint is different than previous
         if (FirstHash || LastFootprintHashed != CurrentFootprint || LiveGuestCode.size() != Entry.GuestSize) {
           LiveGuestCode.resize(Entry.GuestSize);
-          memcpy(LiveGuestCode.data(), reinterpret_cast<const void*>(GuestRIP), Entry.GuestSize);
+          if (!CopyGuestCode(LiveGuestCode.data(), GuestRIP, Entry.GuestSize)) {
+            return std::nullopt;
+          }
           XXH3_state_t HashState;
           XXH3_128bits_reset(&HashState);
           for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
@@ -877,7 +898,8 @@ namespace DiskCache {
   }
 
   bool DiskCache::GuestCodeUnchanged(uint64_t GuestRIP, const CodeHitData& Hit) const {
-    return memcmp(reinterpret_cast<const void*>(GuestRIP), Hit.GuestCode.data(), Hit.GuestCode.size()) == 0;
+    fextl::vector<uint8_t> GuestCode(Hit.GuestCode.size());
+    return CopyGuestCode(GuestCode.data(), GuestRIP, GuestCode.size()) && GuestCode == Hit.GuestCode;
   }
 
   void DiskCache::Validate(uint64_t GuestCodeKey, const CodeHitData& Hit, const CPU::CPUBackend::CompiledCode& CompiledCode,
@@ -1192,11 +1214,15 @@ namespace DiskCache {
     //     LogMan::Msg::IFmt("extent {} {}", ExactGuestCodeExtents[i], ExactGuestCodeExtents[i]+ExactGuestCodeExtents[i+1]);
     //   }
     // }
+    uint8_t* GuestCodeCopy = BlobData + GuestCodeOffset;
+    if (!CopyGuestCode(GuestCodeCopy, reinterpret_cast<uint64_t>(GuestCode.data()), GuestCode.size())) {
+      return false;
+    }
     {
       XXH3_state_t HashState;
       XXH3_128bits_reset(&HashState);
       for (uint32_t i = 0; i < ExactGuestCodeExtents.size(); i += 2) {
-        XXH3_128bits_update(&HashState, GuestCode.data() + ExactGuestCodeExtents[i], ExactGuestCodeExtents[i + 1]);
+        XXH3_128bits_update(&HashState, GuestCodeCopy + ExactGuestCodeExtents[i], ExactGuestCodeExtents[i + 1]);
       }
       Header.GuestHash = XXH3_128bits_digest(&HashState);
     }
@@ -1239,8 +1265,6 @@ namespace DiskCache {
         It->second.MoreEntries->insert({GuestFootprint, std::move(NewEntry)});
       }
     }
-
-    memcpy(BlobData + GuestCodeOffset, GuestCode.data(), GuestCode.size());
 
     MesaFOZ::foz_payload_key Key = {};
     {

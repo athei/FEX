@@ -5,6 +5,7 @@
 #include <windef.h>
 #include <winternl.h>
 
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 
@@ -86,6 +87,30 @@ static inline bool IsSegmentLoad(TMutex& ThreadCreationMutex, TReg Rip) {
   case 0x0f: return Code[1] == 0xa1 || Code[1] == 0xa9; // POP FS, POP GS
   default: return false;
   }
+}
+
+// A compile reads guest code with FaultSafeCopy, and another process can take the page away meanwhile: it doesn't wait
+// for the code invalidation mutex the compile holds shared. An access violation there ends the copy, and the compile
+// stops at the byte as at one it can't fetch, see Decoder::FetchInstBytes. A read that used up a guard reads again, as
+// the guard is gone, so the guest never gets that guard's exception. Runs before anything else that handles an exception,
+// as the compile holds the code invalidation mutex shared, which ThreadCreationMutex comes before. It takes only
+// IntervalsLock, which a caller of FaultSafeCopy must not hold. Returns true if the thread continues at Pc.
+static inline bool HandleFaultSafeCopyFault(InvalidationTracker* Tracker, const EXCEPTION_RECORD& Rec, uint64_t& Pc) {
+  const auto ResumePc = FEXCore::ArchHelpers::Arm64::FaultSafeCopyResumePC(Pc);
+  if (!ResumePc) {
+    return false;
+  }
+  if (Rec.ExceptionCode == STATUS_GUARD_PAGE_VIOLATION) {
+    return true;
+  }
+  if (Rec.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || Rec.NumberParameters < 2) {
+    return false;
+  }
+  if (Tracker) {
+    Tracker->HandleCompileReadFault(static_cast<uint64_t>(Rec.ExceptionInformation[1]));
+  }
+  Pc = ResumePc;
+  return true;
 }
 
 // Whether an access violation can be one of FEX's own faults. The call-ret stack, the lookup cache, the JIT guard page and

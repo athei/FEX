@@ -131,6 +131,7 @@ private:
   // Negative: Number of bytes that failed to decode.
   int32_t CheckRangeExecutable(uint64_t Address, uint64_t Size);
 
+  uint8_t FetchInstBytes(uint8_t Offset, uint8_t Size);
   uint8_t ReadByte();
   std::optional<uint8_t> PeekByte(uint8_t Offset);
   std::pair<uint64_t, bool> ReadData(uint8_t Size);
@@ -201,6 +202,13 @@ private:
   std::array<uint8_t, MAX_INST_SIZE + sizeof(uint64_t)> Instruction;
   // Where the bytes in Instruction end that the decoder read from the guest's memory, if before InstructionSize
   uint8_t UnfetchedOffset {};
+  // The guest's bytes from InstBytesStart, the AdjustedInstStream of the instruction they were copied for, see
+  // FetchInstBytes. The room past MAX_INST_SIZE is for the fields ReadData reads past it, as only ReadByte stops there.
+  std::array<uint8_t, 32> InstBytes;
+  const uint8_t* InstBytesStart {};
+  uint8_t InstBytesSize {};
+  // Whether the copy of InstBytes faulted, at InstBytesSize
+  bool InstBytesFaulted {};
   uint8_t LastEscapePrefix {};
   FEXCore::X86Tables::DecodedInst* DecodeInst;
 

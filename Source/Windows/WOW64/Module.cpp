@@ -1282,6 +1282,10 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
   }
   FEXCORE_PROFILE_ACCUMULATION(Thread, AccumulatedSignalTime);
 
+  if (FEX::Windows::HandleFaultSafeCopyFault(InvalidationTracker ? &*InvalidationTracker : nullptr, *Exception, Context->Pc)) {
+    return true;
+  }
+
   if (FEX::Windows::IsDataAccessViolation(*Exception)) {
     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
     // A fault outside of the JIT, in a syscall that writes guest memory for one, takes FEX locks below

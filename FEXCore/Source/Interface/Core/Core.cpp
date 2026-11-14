@@ -44,6 +44,7 @@ $end_info$
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <FEXCore/HLE/SourcecodeResolver.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/Event.h>
 #include <FEXCore/Utils/File.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -652,11 +653,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 
-          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
-          auto CRC = WantsDiskCachePatching ?
-                       Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
-                       Thread->OpDispatcher->Constant(Value);
-          auto CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, DecodedInfo->InstSize);
+          // Fault-safe, as the decoder's reads are, see Decoder::FetchInstBytes. Bytes that went away since the decoder
+          // read them count as changed, so the block drops itself here, and the next compile stops at them.
+          std::array<uint8_t, 16> Code;
+          IR::Ref CodeChanged {};
+          if (FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Code.data(), ExistingCodePtr, DecodedInfo->InstSize) == DecodedInfo->InstSize) {
+            auto Value = FEXCore::Utils::crc32(Code.data(), DecodedInfo->InstSize);
+            auto CRC = WantsDiskCachePatching ?
+                         Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
+                         Thread->OpDispatcher->Constant(Value);
+            CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, DecodedInfo->InstSize);
+          } else {
+            CodeChanged = Thread->OpDispatcher->Constant(1);
+          }
 
           auto InvalidateCodeCond = Thread->OpDispatcher->CondJump(CodeChanged);
 

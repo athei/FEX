@@ -108,6 +108,10 @@ public:
   // fault again and no compile stopped at the page since. LastRetry is per thread. Called with ThreadCreationMutex held,
   // in a state where the hooks are not called for FEX's syscalls.
   FetchFault HandleFetchFault(uint64_t Address, FetchRetry& LastRetry);
+  // A compile's read of guest code faulted at Address, which ends the block there with a fetch fault, see
+  // HandleFaultSafeCopyFault. Takes a new generation for the page, as a compile that stops at a page in
+  // TrackExecutableMapping does. Called in the compile, which holds the code invalidation mutex shared.
+  void HandleCompileReadFault(uint64_t Address);
 
 private:
   // NOTE: These assume IntervalsLock is held: for writing, by the first two.

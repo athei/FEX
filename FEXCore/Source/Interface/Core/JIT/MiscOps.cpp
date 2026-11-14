@@ -12,10 +12,14 @@ $end_info$
 #include "Interface/Context/Context.h"
 #include "Interface/Core/JIT/DebugData.h"
 #include "Interface/Core/JIT/JITClass.h"
+#include "Interface/IR/RegisterAllocationData.h"
+#include "Utils/variable_length_integer.h"
 
 #include <FEXCore/Core/SignalDelegator.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include <FEXCore/Utils/EnumUtils.h>
+
+#include <array>
 
 namespace FEXCore::CPU {
 
@@ -43,6 +47,118 @@ DEF_OP(GuestOpcode) {
   auto Op = IROp->C<IR::IROp_GuestOpcode>();
   // metadata
   DebugData->GuestOpcodes.push_back({Op->GuestEntryOffset, GetCursorAddress<uint8_t*>() - CodeData.BlockBegin});
+}
+
+DEF_OP(X87StackMap) {
+  // metadata, see JITCodeTail
+  const auto Op = IROp->C<IR::IROp_X87StackMap>();
+  X87StackMapReduced = Op->Reduced;
+  const uint64_t HostOffset = GetCursorAddress<uint8_t*>() - CodeData.BlockBegin;
+  // The offset, the header, four masks, and up to ten bytes for each slot.
+  std::array<uint8_t, 9 + 5 + 8 * 10> Entry;
+  const auto Append = [&](size_t Size) {
+    X87StackMapData.insert(X87StackMapData.end(), Entry.begin(), Entry.begin() + Size);
+    X87StackMapOffset = HostOffset;
+    X87StackMapCount++;
+  };
+
+  if (Op->Unknown) {
+    if (!X87StackMapLastUnknown) {
+      size_t Size = FEXCore::Utils::vl64::Encode(Entry.data(), (HostOffset - X87StackMapOffset) / 4);
+      Entry[Size++] = X87StackMapUnknown;
+      Append(Size);
+      X87StackMapLastUnknown = true;
+    }
+    return;
+  }
+
+  // The op has ST(i) where the entry has the slots.
+  const auto ToSlots = [Push = Op->Push](uint8_t Mask) {
+    return static_cast<uint8_t>((Mask >> Push) | (Mask << ((8 - Push) & 7)));
+  };
+  X87StackMapState New {
+    .Push = Op->Push,
+    .ValidMask = ToSlots(Op->ValidMask),
+    .EmptyMask = ToSlots(Op->EmptyMask),
+    .ValueMask = 0,
+    .Location = X87StackMapLast.Location,
+    .SpillSlot = X87StackMapLast.SpillSlot,
+  };
+  for (uint32_t i = 0; i < 8; i++) {
+    const auto Arg = IROp->Args[i];
+    if (Arg.IsInvalid()) {
+      continue;
+    }
+    const uint32_t Slot = (i - Op->Push) & 7;
+    New.ValueMask |= 1U << Slot;
+
+    // A dual value is a 32-bit float in Precision24 only, see X87PCBinop.
+    uint8_t Format = X87StackMapF80;
+    switch ((Op->SourceMask >> (2 * i)) & 3) {
+    case IR::X87StackMapSourceF32: Format = X87StackMapSingle; break;
+    case IR::X87StackMapSourceF64: Format = X87StackMapDouble; break;
+    case IR::X87StackMapSourceInt64: Format = X87StackMapInt64; break;
+    default:
+      if (Op->Reduced) {
+        Format = (Op->SingleMask & (1U << i)) && EmitX87PCCopy == X87PCCopy::Precision24 ? X87StackMapSingle : X87StackMapDouble;
+      }
+      break;
+    }
+    const uint32_t Location = Arg.GetImmediate();
+    if (Location & IR::X87StackMapSpillSlot) {
+      New.Location[Slot] = static_cast<uint8_t>((Format << X87StackMapFormatShift) | X87StackMapInSpillSlot);
+      New.SpillSlot[Slot] = Location >> 9;
+    } else {
+      New.Location[Slot] = static_cast<uint8_t>((Format << X87StackMapFormatShift) | GetVReg(Arg).Idx());
+      New.SpillSlot[Slot] = 0;
+    }
+  }
+
+  // An entry holds until the next, so one with the same contents adds nothing,
+  // unless an Unknown one is in force.
+  const auto& Last = X87StackMapLast;
+  if (New == Last && !X87StackMapLastUnknown) {
+    return;
+  }
+
+  uint8_t ChangedMask {};
+  for (uint32_t Slot = 0; Slot < 8; Slot++) {
+    if ((New.ValueMask & (1U << Slot)) && (New.Location[Slot] != Last.Location[Slot] || New.SpillSlot[Slot] != Last.SpillSlot[Slot])) {
+      ChangedMask |= 1U << Slot;
+    }
+  }
+  uint8_t Header = New.Push;
+  Header |= New.ValidMask != Last.ValidMask ? X87StackMapHasValidMask : 0;
+  Header |= New.EmptyMask != Last.EmptyMask ? X87StackMapHasEmptyMask : 0;
+  Header |= New.ValueMask != Last.ValueMask ? X87StackMapHasValueMask : 0;
+  Header |= ChangedMask ? X87StackMapHasChangedMask : 0;
+
+  size_t Size = FEXCore::Utils::vl64::Encode(Entry.data(), (HostOffset - X87StackMapOffset) / 4);
+  Entry[Size++] = Header;
+  if (Header & X87StackMapHasValidMask) {
+    Entry[Size++] = New.ValidMask;
+  }
+  if (Header & X87StackMapHasEmptyMask) {
+    Entry[Size++] = New.EmptyMask;
+  }
+  if (Header & X87StackMapHasValueMask) {
+    Entry[Size++] = New.ValueMask;
+  }
+  if (Header & X87StackMapHasChangedMask) {
+    Entry[Size++] = ChangedMask;
+  }
+  for (uint32_t Slot = 0; Slot < 8; Slot++) {
+    if (ChangedMask & (1U << Slot)) {
+      Entry[Size++] = New.Location[Slot];
+      if (New.Location[Slot] & X87StackMapInSpillSlot) {
+        Size += FEXCore::Utils::vl64::Encode(&Entry[Size], New.SpillSlot[Slot]);
+      }
+    }
+  }
+
+  Append(Size);
+  X87StackMapLast = New;
+  X87StackMapLastUnknown = false;
 }
 
 DEF_OP(Fence) {

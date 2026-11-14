@@ -1649,6 +1649,32 @@ DEF_OP(PopTwo) {
   }
 }
 
+DEF_OP(X87StoreSingle) {
+  const auto Op = IROp->C<IR::IROp_X87StoreSingle>();
+  const auto Value = GetVReg(Op->Value);
+  const auto MemSrc = GenerateMemOperand(IR::OpSize::i32Bit, GetReg(Op->Addr), Op->Offset, Op->OffsetType, Op->OffsetScale);
+
+  // A dual value is a 32-bit float in Precision24, see X87PCBinop.
+  if (Op->Dual && EmitX87PCCopy == X87PCCopy::Precision24) {
+    if (Op->Copy) {
+      // Through a copy, as the store of an X87PCToSingle result was for a
+      // value that stays on the stack: storing the register itself measured
+      // 4% slower in a loop that keeps a sum on the stack, stores it each
+      // iteration and writes it back with X87PCStoreLiveOut.
+      fmov(VTMP1.S(), Value.S());
+      str(VTMP1.S(), MemSrc);
+    } else {
+      str(Value.S(), MemSrc);
+    }
+  } else {
+    // The vector form, which writes the whole register: with FPCR.NEP set,
+    // the scalar one merges into VTMP1 and depends on its previous value,
+    // which would chain the stores of a loop. The upper lane is unused.
+    fcvtn(ARMEmitter::SubRegSize::i32Bit, VTMP1, Value);
+    str(VTMP1.S(), MemSrc);
+  }
+}
+
 DEF_OP(StoreMem) {
   const auto Op = IROp->C<IR::IROp_StoreMem>();
   const auto OpSize = IROp->Size;

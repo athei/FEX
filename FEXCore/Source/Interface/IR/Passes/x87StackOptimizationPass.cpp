@@ -5,11 +5,13 @@
 #include "Interface/IR/IREmitter.h"
 #include "Interface/IR/Passes.h"
 #include "Interface/IR/PassManager.h"
+#include "Interface/IR/RegisterAllocationData.h"
 #include "FEXCore/IR/IR.h"
 #include "FEXCore/Utils/Profiler.h"
 #include "FEXCore/Core/HostFeatures.h"
 #include "Interface/Core/Addressing.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -227,8 +229,9 @@ private:
 
   // Performs a store to memory from a value the stack passed in as StackNode.
   // This is the version dealing with the reduced precision case.
-  // Single says that StackNode is a dual value, see X87PCBinop.
-  void StoreStackMem_Reduced_Helper(const IRListView& IR, const IROp_StoreStackMem* Op, Ref StackNode, bool Single) {
+  // Single says that StackNode is a dual value, see X87PCBinop. Pops says
+  // that the instruction pops the value, see X87StoreSingle.
+  void StoreStackMem_Reduced_Helper(const IRListView& IR, const IROp_StoreStackMem* Op, Ref StackNode, bool Single, bool Pops) {
     LOGMAN_THROW_A_FMT(ReducedPrecisionMode, "Reduced precision mode expected.");
 
     Ref AddrNode = IR.GetNode(Op->Addr);
@@ -237,23 +240,20 @@ private:
     MemOffsetType OffsetType = Op->OffsetType;
     uint8_t OffsetScale = Op->OffsetScale;
 
+    // The store reads the value or its exact 64-bit float itself, see
+    // EndInstruction.
     switch (Op->StoreSize) {
     case OpSize::i32Bit: {
-      if (Single) {
-        StackNode = IREmit->_X87PCToSingle(StackNode);
-      } else {
-        StackNode = IREmit->_Float_FToF(OpSize::i32Bit, OpSize::i64Bit, StackNode);
-      }
-      IREmit->_StoreMemFPR(Op->StoreSize, StackNode, AddrNode, Offset, Align, OffsetType, OffsetScale);
+      IREmit->_X87StoreSingle(Op->StoreSize, StackNode, AddrNode, Offset, OffsetType, OffsetScale, Single, !Pops);
       break;
     }
     case OpSize::i64Bit: {
-      IREmit->_StoreMemFPR(Op->StoreSize, ToDouble(StackNode, Single), AddrNode, Offset, Align, OffsetType, OffsetScale);
+      IREmit->_StoreMemFPR(Op->StoreSize, SubstituteDouble(StackNode, ToDouble(StackNode, Single)), AddrNode, Offset, Align, OffsetType, OffsetScale);
       break;
     }
 
     case OpSize::f80Bit: {
-      StackNode = IREmit->_F80CVTTo(ToDouble(StackNode, Single), OpSize::i64Bit);
+      StackNode = IREmit->_F80CVTTo(SubstituteDouble(StackNode, ToDouble(StackNode, Single)), OpSize::i64Bit);
       Store80BitToMem(Op, StackNode, AddrNode, Offset, Align, OffsetType, OffsetScale);
       break;
     }
@@ -476,6 +476,71 @@ private:
   std::array<bool, 8> TopSingleCache {};
   std::array<StackSlot, 8> TopValidCache {};
 
+  // A fault in the middle of the block, which a guest handler or inline SMC
+  // continues from, finds the x87 state that the block hasn't written back
+  // yet only in registers. At each guest instruction that can fault, and after
+  // each write-back in the middle of an instruction, EmitStackMap emits an
+  // X87StackMap with that state, which the JIT records for
+  // ReconstructX87State.
+  //
+  // FSTP and FISTP read the value they pop before their store, and a later
+  // instruction without an X87StackMap can pop or overwrite a value without
+  // reading it, so a register could be reused before the instruction's last
+  // memory access faults. EndInstruction emits an X87StackKeep after that
+  // access for the values of the instruction's X87StackMap ops, which keeps
+  // them allocated up to there and no further. A value whose last use
+  // is a conversion to a 64-bit float that is then stored or converted gives
+  // its place in the X87StackMap to the result, see SubstituteDouble, so the
+  // register allocator can still reuse its register for that result.
+  void EmitStackMap(bool Empty = false, Ref From = nullptr, Ref To = nullptr);
+  // The state an X87StackMap records: the values of ST(i), the masks and the
+  // pushes TOP is behind.
+  struct MapState {
+    std::array<Ref, 8> Values {};
+    uint8_t ValidMask {};
+    uint8_t EmptyMask {};
+    uint8_t SingleMask {};
+    uint8_t Push {};
+    bool operator==(const MapState&) const = default;
+  };
+  MapState CurrentMapState() const;
+  // A guest instruction without an op that can fault gets no X87StackMap, so
+  // the one in force there is from an earlier instruction. If the state has
+  // changed since, EmitUnknownMap emits one with Unknown set, which leaves
+  // the context as it is, as without the X87StackMap ops: the state of the
+  // last one is LastMap, and MapUnknown says that an Unknown one followed.
+  void EmitUnknownMap();
+  MapState LastMap {};
+  bool MapUnknown = false;
+  void EndInstruction();
+  // Emits an X87StackMap with To, the exact 64-bit float of From, instead of
+  // From, if From is on the stack.
+  Ref SubstituteDouble(Ref From, Ref To);
+  bool MapActive = false;
+  // The values of the X87StackMap ops of the current instruction, and those
+  // that were emitted before LastAccess, its last memory access so far.
+  fextl::vector<Ref> MapReferenced;
+  fextl::vector<Ref> KeepAtAccess;
+  Ref LastAccess {};
+  static bool IsMemoryAccess(IROps Op);
+  // Whether the guest instruction whose GuestOpcode is CodeNode has an op that
+  // can fault. Only those get an X87StackMap.
+  bool CanFault(const IRListView& IR, Ref CodeNode) const;
+  // A value of the X87StackMap ops that FLD m32, FLD m64 or FILD m64 converted
+  // from Source, see X87StackMapSource. FixupMapSources gives the X87StackMap
+  // and X87StackKeep ops Source instead if nothing else reads the conversion,
+  // so that it stays dead code, as when FST or FISTP stores Source itself.
+  struct MapSource {
+    Ref Value;
+    Ref Source;
+    X87StackMapSource Kind;
+  };
+  fextl::vector<MapSource> MapSources;
+  void FixupMapSources(const IRListView& IR, Ref BlockNode);
+  // The pushes minus pops that TOP in the context is behind TopOffsetCache[0],
+  // which FlushCachedRegs writes.
+  int32_t SlowPendingPush {};
+
   // Are we on the slow path?
   // Once we enter the slow path, we never come out.
   // This just simplifies the code atm. If there's a need to return to the fast path in the future
@@ -516,6 +581,240 @@ inline void X87StackOptimization::Reset() {
   SpeculatedDoubleCount = 0;
   BaseDelta = 0;
   SlowDelta = 0;
+  MapActive = false;
+  LastMap = {};
+  MapUnknown = false;
+  MapReferenced.clear();
+  KeepAtAccess.clear();
+  LastAccess = nullptr;
+  MapSources.clear();
+  SlowPendingPush = 0;
+}
+
+bool X87StackOptimization::CanFault(const IRListView& IR, Ref CodeNode) const {
+  for (auto It = ++IR.at(CodeNode);; ++It) {
+    const auto [Node, IROp] = It();
+    if (IROp->Op == OP_GUESTOPCODE || IROp->Op == OP_ENDBLOCK) {
+      return false;
+    }
+    // StoreStackMem becomes a store below.
+    if (IsMemoryAccess(IROp->Op) || IROp->Op == OP_STORESTACKMEM || IROp->Op == OP_BREAK) {
+      return true;
+    }
+  }
+}
+
+void X87StackOptimization::FixupMapSources(const IRListView& IR, Ref BlockNode) {
+  for (const auto& [Value, Source, Kind] : MapSources) {
+    uint32_t MapUses {};
+    for (auto [CodeNode, IROp] : IR.GetCode(BlockNode)) {
+      if (IROp->Op == OP_X87STACKMAP || IROp->Op == OP_X87STACKKEEP) {
+        for (uint8_t i = 0; i < 8; i++) {
+          MapUses += !IROp->Args[i].IsInvalid() && IR.GetNode(IROp->Args[i]) == Value;
+        }
+      }
+    }
+    if (MapUses != Value->GetUses()) {
+      continue;
+    }
+    for (auto [CodeNode, IROp] : IR.GetCode(BlockNode)) {
+      if (IROp->Op != OP_X87STACKMAP && IROp->Op != OP_X87STACKKEEP) {
+        continue;
+      }
+      for (uint8_t i = 0; i < 8; i++) {
+        if (IROp->Args[i].IsInvalid() || IR.GetNode(IROp->Args[i]) != Value) {
+          continue;
+        }
+        IREmit->ReplaceNodeArgument(CodeNode, i, Source);
+        if (IROp->Op == OP_X87STACKMAP) {
+          auto* Op = IROp->CW<IROp_X87StackMap>();
+          Op->SourceMask |= Kind << (2 * i);
+          Op->SingleMask &= ~(1U << i);
+        }
+      }
+    }
+  }
+}
+
+bool X87StackOptimization::IsMemoryAccess(IROps Op) {
+  switch (Op) {
+  case OP_LOADMEM:
+  case OP_LOADMEMTSO:
+  case OP_LOADMEMPAIR:
+  case OP_LOADMEMX87SVEOPTPREDICATE:
+  case OP_STOREMEM:
+  case OP_STOREMEMTSO:
+  case OP_STOREMEMPAIR:
+  case OP_STOREMEMX87SVEOPTPREDICATE:
+  case OP_X87STORESINGLE:
+  case OP_VLOADVECTORMASKED:
+  case OP_VSTOREVECTORMASKED:
+  case OP_VLOADVECTORGATHERMASKED:
+  case OP_VLOADVECTORGATHERMASKEDQPS:
+  case OP_VLOADVECTORELEMENT:
+  case OP_VSTOREVECTORELEMENT:
+  case OP_VBROADCASTFROMMEM:
+  case OP_VLOADNONTEMPORAL:
+  case OP_VSTORENONTEMPORAL:
+  case OP_VSTORENONTEMPORALPAIR:
+  case OP_MEMSET:
+  case OP_MEMCPY:
+  case OP_CAS:
+  case OP_CASPAIR:
+  case OP_ATOMICSWAP:
+  case OP_ATOMICFETCHADD:
+  case OP_ATOMICFETCHSUB:
+  case OP_ATOMICFETCHAND:
+  case OP_ATOMICFETCHCLR:
+  case OP_ATOMICFETCHOR:
+  case OP_ATOMICFETCHXOR:
+  case OP_ATOMICFETCHNEG:
+  case OP_F80BCDLOAD:
+  case OP_F80BCDSTORE:
+  case OP_PUSH:
+  case OP_PUSHTWO:
+  case OP_POP:
+  case OP_POPTWO:
+  case OP_CACHELINECLEAR:
+  case OP_CACHELINECLEAN:
+  case OP_CACHELINEZERO:
+  case OP_MONOBACKPATCHERWRITE:
+  // Reads the guest code under full SMC checks, see IsCodeValidationRead.
+  case OP_VALIDATECODE: return true;
+  default: return false;
+  }
+}
+
+void X87StackOptimization::EndInstruction() {
+  if (LastAccess) {
+    // Every value of the X87StackMap ops, also one still on the stack, as a
+    // later instruction without an X87StackMap can pop or overwrite it
+    // without reading it.
+    std::array<Ref, 8> Keep {};
+    size_t KeepCount {};
+    const auto EmitKeep = [&] {
+      const auto Arg = [&](Ref V) {
+        return V ? V : IREmit->Invalid();
+      };
+      IREmit->_X87StackKeep(Arg(Keep[0]), Arg(Keep[1]), Arg(Keep[2]), Arg(Keep[3]), Arg(Keep[4]), Arg(Keep[5]), Arg(Keep[6]), Arg(Keep[7]));
+      Keep.fill(nullptr);
+      KeepCount = 0;
+    };
+    IREmit->SetWriteCursor(LastAccess);
+    for (Ref V : KeepAtAccess) {
+      Keep[KeepCount++] = V;
+      if (KeepCount == Keep.size()) {
+        EmitKeep();
+      }
+    }
+    if (KeepCount) {
+      EmitKeep();
+    }
+  }
+  MapReferenced.clear();
+  KeepAtAccess.clear();
+  LastAccess = nullptr;
+}
+
+Ref X87StackOptimization::SubstituteDouble(Ref From, Ref To) {
+  if (From != To && std::find(MapReferenced.begin(), MapReferenced.end(), From) != MapReferenced.end()) {
+    EmitStackMap(false, From, To);
+  }
+  return To;
+}
+
+X87StackOptimization::MapState X87StackOptimization::CurrentMapState() const {
+  MapState State {};
+  int32_t Push = SlowPendingPush;
+  if (!SlowPath) {
+    Push += StackData.TopOffset;
+    for (size_t i = 0; i < StackData.size; i++) {
+      const auto& [Type, Member] = StackData.top(i);
+      if (Type == StackSlot::VALID) {
+        State.Values[i] = Member.StackDataNode;
+        State.ValidMask |= 1U << i;
+        State.SingleMask |= Member.Single ? 1U << i : 0;
+      } else if (Type == StackSlot::INVALID) {
+        State.EmptyMask |= 1U << i;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < State.Values.size(); i++) {
+      if (FlushValuesPending[i]) {
+        State.Values[i] = TopValueCache[i];
+        State.SingleMask |= TopSingleCache[i] ? 1U << i : 0;
+      }
+      if (FlushValidPending) {
+        State.ValidMask |= TopValidCache[i] == StackSlot::VALID ? 1U << i : 0;
+        State.EmptyMask |= TopValidCache[i] == StackSlot::INVALID ? 1U << i : 0;
+      }
+    }
+  }
+  State.Push = Push & 7;
+  return State;
+}
+
+void X87StackOptimization::EmitUnknownMap() {
+  if (MapUnknown || CurrentMapState() == LastMap) {
+    return;
+  }
+  const auto Invalid = IREmit->Invalid();
+  IREmit->_X87StackMap(0, 0, 0, 0, 0, ReducedPrecisionMode, true, Invalid, Invalid, Invalid, Invalid, Invalid, Invalid, Invalid, Invalid);
+  MapUnknown = true;
+}
+
+void X87StackOptimization::EmitStackMap(bool Empty, Ref From, Ref To) {
+  auto State = Empty ? MapState {} : CurrentMapState();
+  auto& [Values, ValidMask, EmptyMask, SingleMask, Push] = State;
+  for (size_t i = 0; !Empty && !SlowPath && i < StackData.size; i++) {
+    const auto& [Type, Member] = StackData.top(i);
+    if (Type == StackSlot::VALID && Member.Source && Member.Source->Node != Member.StackDataNode) {
+      const auto& Source = *Member.Source;
+      const auto Kind = Source.Integer                ? X87StackMapSourceInt64 :
+                        Source.Size == OpSize::i32Bit ? X87StackMapSourceF32 :
+                        Source.Size == OpSize::i64Bit ? X87StackMapSourceF64 :
+                                                        X87StackMapSourceNone;
+      const bool Known =
+        std::any_of(MapSources.begin(), MapSources.end(), [&](const MapSource& S) { return S.Value == Member.StackDataNode; });
+      if (Kind != X87StackMapSourceNone && !Known) {
+        MapSources.push_back({Member.StackDataNode, Source.Node, Kind});
+      }
+    }
+  }
+
+  for (size_t i = 0; From && i < Values.size(); i++) {
+    if (Values[i] == From) {
+      Values[i] = To;
+      SingleMask &= ~(1U << i);
+    }
+  }
+
+  const bool Active = State != MapState {};
+  if (!Active && !MapActive) {
+    // Nothing is pending, which an Unknown X87StackMap in force also gives.
+    LastMap = {};
+    MapUnknown = false;
+    return;
+  }
+
+  const auto Arg = [&](Ref V) {
+    return V ? V : IREmit->Invalid();
+  };
+  IREmit->_X87StackMap(Push, ValidMask, EmptyMask, SingleMask, 0, ReducedPrecisionMode, false, Arg(Values[0]), Arg(Values[1]),
+                       Arg(Values[2]), Arg(Values[3]), Arg(Values[4]), Arg(Values[5]), Arg(Values[6]), Arg(Values[7]));
+  MapActive = Active;
+  LastMap = State;
+  MapUnknown = false;
+
+  // The substituted value no longer needs its register.
+  if (From) {
+    std::erase(MapReferenced, From);
+  }
+  for (Ref V : Values) {
+    if (V && std::find(MapReferenced.begin(), MapReferenced.end(), V) == MapReferenced.end()) {
+      MapReferenced.push_back(V);
+    }
+  }
 }
 
 inline Ref X87StackOptimization::GetConstant(ssize_t Offset) {
@@ -643,7 +942,7 @@ Ref X87StackOptimization::LoadStackValueInt64_Slow(bool Truncate) {
   };
 
   Ref Value = LoadStackValueAtOffset_Slow();
-  Value = ToDouble(Value, TopSingleCache[0]);
+  Value = SubstituteDouble(Value, ToDouble(Value, TopSingleCache[0]));
   if (FlushValuesPending[0]) {
     // Written in this block: the slot in memory is stale.
     return TopIntCache[0] ? TopIntCache[0] : Convert(Value);
@@ -1056,6 +1355,7 @@ inline void X87StackOptimization::UpdateTopForPop_Slow(bool InvalidateTag) {
 
   // Pop the top of the x87 stack
   --SlowDelta;
+  --SlowPendingPush;
   GetOffsetTopWithCache_Slow(1);
   PopContainer(TopOffsetCache);
   PopContainer(TopOffsetAddressCache);
@@ -1075,6 +1375,7 @@ inline void X87StackOptimization::UpdateTopForPush_Slow() {
 
   // Push the top of the x87 stack
   ++SlowDelta;
+  ++SlowPendingPush;
   GetOffsetTopWithCache_Slow(1, true);
   PushContainer(TopOffsetCache);
   PushContainer(TopOffsetAddressCache);
@@ -1090,6 +1391,7 @@ void X87StackOptimization::FlushCachedRegs() {
   if (FlushTopPending) {
     IREmit->_StoreContextGPR(OpSize::i8Bit, TopOffsetCache[0], offsetof(FEXCore::Core::CPUState, flags) + FEXCore::X86State::X87FLAG_TOP_LOC);
     FlushTopPending = false;
+    SlowPendingPush = 0;
   }
 
   auto Size = ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit;
@@ -1190,6 +1492,7 @@ Ref X87StackOptimization::SynchronizeStackValues() {
   if (TopOffset != 0) {
     Ref NewTop = GetOffsetTopWithCache_Slow(TopOffset, true);
     SetTopWithCache_Slow(NewTop);
+    SlowPendingPush += TopOffset;
   }
   StackData.TopOffset = 0;
   BaseDelta += TopOffset;
@@ -1258,6 +1561,20 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       }
     }
     for (auto [CodeNode, IROp] : CurrentIR.GetCode(BlockNode)) {
+      if (IROp->Op == OP_GUESTOPCODE) {
+        EndInstruction();
+        IREmit->SetWriteCursor(CodeNode);
+        if (CanFault(CurrentIR, CodeNode)) {
+          EmitStackMap();
+        } else {
+          EmitUnknownMap();
+        }
+        continue;
+      }
+      if (IsMemoryAccess(IROp->Op) && !MapReferenced.empty()) {
+        LastAccess = CodeNode;
+        KeepAtAccess = MapReferenced;
+      }
       if (!LoweredX87(IROp->Op)) {
         continue;
       }
@@ -1424,6 +1741,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         InvalidateCachedRegs();
         // Nothing is live in from earlier blocks any more.
         WrittenMask = 0xff;
+        EmitStackMap();
         break;
       }
 
@@ -1513,7 +1831,9 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       case OP_READSTACKVALUE: {
         const auto* Op = IROp->C<IROp_ReadStackValue>();
         auto Offset = Op->StackLocation;
-        Ref NewValue = LoadStackValue(Offset);
+        // FIST converts and stores what this returns, see EndInstruction.
+        const auto Value = LoadStackValueDual(Offset);
+        Ref NewValue = SubstituteDouble(Value.Node, ToDouble(Value));
 
         IREmit->ReplaceUsesWithAfter(CodeNode, NewValue, CodeNode);
         break;
@@ -1537,9 +1857,11 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         } else if (Value->Source && Value->Source->Integer) {
           Result = Value->Source->Node;
         } else if (Op->Truncate) {
-          Result = IREmit->_Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit, ToDouble(Value->StackDataNode, Value->Single));
+          Result = IREmit->_Vector_FToZS(OpSize::i128Bit, OpSize::i64Bit,
+                                         SubstituteDouble(Value->StackDataNode, ToDouble(Value->StackDataNode, Value->Single)));
         } else {
-          Result = IREmit->_Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, ToDouble(Value->StackDataNode, Value->Single));
+          Result = IREmit->_Vector_FToS(OpSize::i128Bit, OpSize::i64Bit,
+                                        SubstituteDouble(Value->StackDataNode, ToDouble(Value->StackDataNode, Value->Single)));
         }
 
         IREmit->ReplaceUsesWithAfter(CodeNode, Result, CodeNode);
@@ -1599,7 +1921,16 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         }
 
         if (ReducedPrecisionMode) {
-          StoreStackMem_Reduced_Helper(CurrentIR, Op, StackNode, Single);
+          // FSTP follows the store with PopStackDestroy, see OpDispatchBuilder::FST.
+          bool Pops = false;
+          for (auto It = ++CurrentIR.at(CodeNode);; ++It) {
+            const auto [NextNode, NextOp] = It();
+            if (NextOp->Op == OP_GUESTOPCODE || NextOp->Op == OP_ENDBLOCK || LoweredX87(NextOp->Op)) {
+              Pops = NextOp->Op == OP_POPSTACKDESTROY;
+              break;
+            }
+          }
+          StoreStackMem_Reduced_Helper(CurrentIR, Op, StackNode, Single, Pops);
           break;
         }
 
@@ -1756,6 +2087,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
         // This synchronizes stack values but doesn't necessarily moves us off the FastPath!
         Ref NewTop = SynchronizeStackValues();
         FlushCachedRegs();
+        EmitStackMap();
         IREmit->ReplaceUsesWithAfter(CodeNode, NewTop, CodeNode);
         break;
       }
@@ -1769,6 +2101,7 @@ void X87StackOptimization::Run(IREmitter* Emit) {
       case OP_STACKFORCESLOW: {
         MigrateToSlowPathIf(true);
         InvalidateCachedRegs();
+        EmitStackMap();
         break;
       }
 
@@ -1833,9 +2166,12 @@ void X87StackOptimization::Run(IREmitter* Emit) {
     --Last;
     auto [LastCodeNode, LastIROp] = Last();
     LOGMAN_THROW_A_FMT(IsBlockExit(LastIROp->Op), "must be exit");
+    EndInstruction();
     IREmit->SetWriteCursorBefore(LastCodeNode);
     SynchronizeStackValues();
     FlushCachedRegs();
+    EmitStackMap(true);
+    FixupMapSources(CurrentIR, BlockNode);
 
     if (CheckNode) {
       // The checked slots are the same ones at the end if TOP is, and the

@@ -45,4 +45,16 @@ union PhysicalRegister {
 
 static_assert(sizeof(PhysicalRegister) == 1);
 
+// A value of X87StackMap after register allocation is the immediate Raw of its
+// PhysicalRegister, or this bit with the spill slot from bit 9 up.
+constexpr uint32_t X87StackMapSpillSlot = 1U << 8;
+
+// The two bits of a value in X87StackMap::SourceMask.
+enum X87StackMapSource : uint8_t {
+  X87StackMapSourceNone,
+  X87StackMapSourceF32,
+  X87StackMapSourceF64,
+  X87StackMapSourceInt64,
+};
+
 } // namespace FEXCore::IR

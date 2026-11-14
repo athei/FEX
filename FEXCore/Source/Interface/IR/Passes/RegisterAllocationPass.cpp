@@ -16,6 +16,7 @@ $end_info$
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Profiler.h>
 #include <FEXCore/fextl/vector.h>
+#include <array>
 #include <bit>
 #include <cstdint>
 
@@ -117,6 +118,13 @@ private:
   fextl::vector<uint32_t> NextUses;
 
   bool AnySpilled {};
+
+  // The last X87StackMap of the block, and the values its ST0 to ST7 had, see
+  // AllocateX87StackMap.
+  Ref LastX87StackMap {};
+  std::array<Ref, 8> LastX87StackMapValues {};
+  void AllocateX87StackMap(Ref CodeNode, IROp_Header* IROp);
+  void MoveX87StackMapValue(Ref Node, uint32_t Location);
 
   bool IsValidArg(OrderedNodeWrapper Arg) const {
     if (Arg.IsInvalid()) {
@@ -251,21 +259,27 @@ private:
       }
       // End of iteration gunk
 
-      const int NumArgs = IR::GetRAArgs(IROp->Op);
-      for (int i = NumArgs - 1; i >= 0; --i) {
-        auto V = IROp->Args[i];
-        V.ClearKill();
+      // The metadata of X87StackMap and X87StackKeep doesn't count as a use
+      // for spilling, see AllocateX87StackMap. A value that only they still
+      // read stays allocated with no next use, so spilling takes it first,
+      // with a store where the register would have been free without them.
+      if (IROp->Op != OP_X87STACKMAP && IROp->Op != OP_X87STACKKEEP) {
+        const int NumArgs = IR::GetRAArgs(IROp->Op);
+        for (int i = NumArgs - 1; i >= 0; --i) {
+          auto V = IROp->Args[i];
+          V.ClearKill();
 
-        if (IsValidArg(V)) {
-          const uint32_t Index = V.ID().Value;
+          if (IsValidArg(V)) {
+            const uint32_t Index = V.ID().Value;
 
-          SourcesNextUses.push_back(NextUses[Index]);
-          NextUses[Index] = IP;
+            SourcesNextUses.push_back(NextUses[Index]);
+            NextUses[Index] = IP;
+          }
         }
-      }
 
-      // IP is relative to block end and we iterate backwards, so increment.
-      ++IP;
+        // IP is relative to block end and we iterate backwards, so increment.
+        ++IP;
+      }
 
       // Rest is iteration gunk
       if (CodeLast == CodeBegin) {
@@ -348,6 +362,9 @@ private:
     // Now that we've spilled the value, take it out of the register file
     FreeReg(Reg);
     AnySpilled = true;
+    if (!SpillSlots.empty() && SpillSlots[Value]) {
+      MoveX87StackMapValue(Candidate, X87StackMapSpillSlot | ((SpillSlots[Value] - 1) << 9));
+    }
   }
 
   void RemapReg(Ref Node, PhysicalRegister Reg) {
@@ -572,6 +589,81 @@ bool ConstrainedRAPass::TryPostRAMerge(Ref LastNode, Ref CodeNode, IROp_Header* 
   return false;
 }
 
+// An X87StackMap or X87StackKeep reads its values without filling them. Each
+// value of an X87StackMap becomes its location: its spill slot if it was
+// spilled, which holds it to the end of the block, or else its register. The
+// values of an X87StackKeep only keep their registers allocated up to here.
+void ConstrainedRAPass::AllocateX87StackMap(Ref CodeNode, IROp_Header* IROp) {
+  const bool Map = IROp->Op == OP_X87STACKMAP;
+  if (Map) {
+    LastX87StackMapValues.fill(nullptr);
+  }
+  const int NumArgs = IR::GetRAArgs(IROp->Op);
+  for (int s = 0; s < NumArgs; ++s) {
+    auto V = IROp->Args[s];
+    const bool Kill = V.HasKill();
+    V.ClearKill();
+    if (!IsValidArg(V)) {
+      continue;
+    }
+
+    Ref Node = IR->GetNode(V);
+    const uint32_t ID = IR->GetID(Node).Value;
+    uint32_t Location {};
+    if (!SpillSlots.empty() && SpillSlots[ID]) {
+      Location = X87StackMapSpillSlot | ((SpillSlots[ID] - 1) << 9);
+    } else if (IsInRegisterFile(Node)) {
+      Location = SSAToReg[ID].Raw;
+    }
+    LOGMAN_THROW_A_FMT(Location, "X87StackMap value is gone");
+
+    if (Kill && IsInRegisterFile(Node)) {
+      FreeReg(SSAToReg[ID]);
+    }
+
+    if (Map && Location) {
+      LastX87StackMapValues[s] = Node;
+      IROp->Args[s].SetImmediate(Location);
+    } else {
+      IROp->Args[s].SetInvalid();
+    }
+  }
+  if (Map) {
+    LastX87StackMap = CodeNode;
+  }
+}
+
+// Node, which the last X87StackMap has in a register, moved to Location before
+// the write cursor, and the register may be reused. Emits a copy of that
+// X87StackMap with the new location.
+void ConstrainedRAPass::MoveX87StackMapValue(Ref Node, uint32_t Location) {
+  if (!LastX87StackMap) {
+    return;
+  }
+
+  const auto* Op = IR->GetOp<IROp_X87StackMap>(LastX87StackMap);
+  std::array<OrderedNodeWrapper, 8> Args;
+  bool Moved {};
+  for (size_t i = 0; i < Args.size(); ++i) {
+    Args[i] = Op->Header.Args[i];
+    if (LastX87StackMapValues[i] == Node && !(Args[i].GetImmediate() & X87StackMapSpillSlot)) {
+      Args[i] = OrderedNodeWrapper::FromImmediate(Location);
+      Moved = true;
+    }
+  }
+  if (!Moved) {
+    return;
+  }
+
+  auto Invalid = IREmit->Invalid();
+  auto New = IREmit->_X87StackMap(Op->Push, Op->ValidMask, Op->EmptyMask, Op->SingleMask, Op->SourceMask, Op->Reduced, Op->Unknown, Invalid,
+                                  Invalid, Invalid, Invalid, Invalid, Invalid, Invalid, Invalid);
+  for (size_t i = 0; i < Args.size(); ++i) {
+    New.first->Header.Args[i] = Args[i];
+  }
+  LastX87StackMap = New;
+}
+
 void ConstrainedRAPass::Run(IREmitter* IREmit_) {
   FEXCORE_PROFILE_SCOPED("PassManager::RA");
 
@@ -586,6 +678,7 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
   for (auto [BlockNode, BlockHeader] : IR->GetBlocks()) {
     // Spilling is local, so reset this per-block
     AnySpilled = false;
+    LastX87StackMap = nullptr;
 
     // At the start of each block, all registers are available.
     for (auto& Class : Classes) {
@@ -669,6 +762,10 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
       if (IROp->Op == OP_GUESTOPCODE || IROp->Op == OP_INLINECONSTANT) {
         continue;
       }
+      if (IROp->Op == OP_X87STACKMAP || IROp->Op == OP_X87STACKKEEP) {
+        AllocateX87StackMap(CodeNode, IROp);
+        continue;
+      }
 
       // Static registers must be consistent at SRA load/store. Evict to ensure.
       if (auto Node = DecodeSRANode(IROp, CodeNode); Node != nullptr) {
@@ -698,6 +795,8 @@ void ConstrainedRAPass::Run(IREmitter* IREmit_) {
             FreeReg(Reg);
             AssignReg(IR->GetOp<IROp_Header>(Copy), BlockIROp, Copy, IROp);
             RemapReg(Old, PhysicalRegister(Copy));
+            IREmit->SetWriteCursor(Copy);
+            MoveX87StackMapValue(Old, PhysicalRegister(Copy).Raw);
           }
         }
       }

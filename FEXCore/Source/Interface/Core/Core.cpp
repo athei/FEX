@@ -33,6 +33,7 @@ $end_info$
 #include "Utils/crc32.h"
 #include <FEXCore/Utils/SpinWaitLock.h>
 #include "Utils/variable_length_integer.h"
+#include "Common/SoftFloat.h"
 
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Core/Context.h>
@@ -212,6 +213,168 @@ bool ContextImpl::IsCodeValidationRead(FEXCore::Core::InternalThreadState* Threa
   };
   return (Load & LoadPostIndexMask) == LoadPostIndex && Rt(Load) == CPU::TMP3.Idx() && Rn(Load) == CPU::TMP2.Idx() &&
          (CRC & CRC32Mask) == CRC32 && Rm(CRC) == CPU::TMP3.Idx() && Rd(CRC) == CPU::TMP1.Idx();
+}
+
+void ContextImpl::ReconstructX87State(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, const __uint128_t* HostVRegs, uint64_t HostSP) {
+  const auto Frame = Thread->CurrentFrame;
+  const uint64_t BlockBegin = Frame->State.InlineJITBlockHeader;
+  auto [InlineHeader, InlineTail] = GetFrameBlockInfo(Frame);
+  if (!InlineHeader || !InlineTail->HasX87StackMap || HostPC < BlockBegin || HostPC >= BlockBegin + InlineTail->Size) {
+    return;
+  }
+
+  // The X87StackMap entries follow the RIP entries, see JITCodeTail. Every
+  // read stays inside the block, and a tail that ends early or holds values
+  // out of range leaves the thread state as it is.
+  const uint64_t BlockSize = InlineTail->Size;
+  const auto End = reinterpret_cast<const uint8_t*>(BlockBegin + BlockSize);
+  auto Data = reinterpret_cast<const uint8_t*>(BlockBegin + InlineHeader->OffsetToBlockTail + InlineTail->OffsetToRIPEntries);
+  bool Valid = Data < End;
+  // Decodes from a copy, as a vl64 or vl64pair can read past its first byte
+  // before its size is known.
+  const auto Read = [&](auto Decode, size_t MaxSize) {
+    uint8_t Bytes[17] {};
+    memcpy(Bytes, Data, Valid ? std::min<size_t>(MaxSize, End - Data) : 0);
+    const auto Decoded = Decode(Bytes);
+    Valid = Valid && Decoded.Size <= static_cast<size_t>(End - Data);
+    Data += Valid ? Decoded.Size : 0;
+    return Decoded;
+  };
+  const auto ReadVL64 = [&](int64_t Max) {
+    const auto Integer = Read([](const uint8_t* Bytes) { return FEXCore::Utils::vl64::Decode(Bytes); }, 9).Integer;
+    Valid = Valid && Integer >= 0 && Integer <= Max;
+    return Valid ? Integer : 0;
+  };
+  const auto ReadU8 = [&]() {
+    Valid = Valid && Data < End;
+    return Valid ? *Data++ : uint8_t {};
+  };
+
+  for (uint32_t i = 0; Valid && i < InlineTail->NumberOfRIPEntries; ++i) {
+    Read([](const uint8_t* Bytes) { return FEXCore::Utils::vl64pair::Decode(Bytes); }, 17);
+  }
+  // Each entry takes two bytes at least.
+  const int64_t Count = ReadVL64((End - Data) / 2);
+  const int64_t SpillSlotCount = ReadVL64(BlockSize / CPU::CPUBackend::MaxSpillSlotSize);
+  const uint8_t ReducedByte = ReadU8();
+  const bool Reduced = ReducedByte == 1;
+  Valid = Valid && ReducedByte <= 1;
+
+  // Applies the changes of each entry at or before HostPC. An Unknown one in
+  // force leaves the thread state as it is.
+  bool Found = false;
+  bool Unknown = false;
+  uint8_t Push {}, ValidMask {}, EmptyMask {}, ValueMask {};
+  uint8_t Locations[8] {};
+  int64_t SpillSlots[8] {};
+  uint64_t Offset {};
+  for (int64_t i = 0; Valid && i < Count; ++i) {
+    Offset += ReadVL64((BlockSize - Offset) / 4) * 4;
+    if (!Valid || HostPC < BlockBegin + Offset) {
+      break;
+    }
+    Found = true;
+
+    const uint8_t Header = ReadU8();
+    Unknown = Header & CPU::CPUBackend::X87StackMapUnknown;
+    if (Unknown) {
+      continue;
+    }
+    Push = Header & CPU::CPUBackend::X87StackMapPush;
+    if (Header & CPU::CPUBackend::X87StackMapHasValidMask) {
+      ValidMask = ReadU8();
+    }
+    if (Header & CPU::CPUBackend::X87StackMapHasEmptyMask) {
+      EmptyMask = ReadU8();
+    }
+    if (Header & CPU::CPUBackend::X87StackMapHasValueMask) {
+      ValueMask = ReadU8();
+    }
+    const uint8_t ChangedMask = Header & CPU::CPUBackend::X87StackMapHasChangedMask ? ReadU8() : 0;
+    for (uint32_t Slot = 0; Slot < 8; ++Slot) {
+      if (ChangedMask & (1U << Slot)) {
+        Locations[Slot] = ReadU8();
+        if (Locations[Slot] & CPU::CPUBackend::X87StackMapInSpillSlot) {
+          SpillSlots[Slot] = ReadVL64(SpillSlotCount - 1);
+        }
+      }
+    }
+  }
+  if (!Valid || !Found || Unknown) {
+    return;
+  }
+
+  auto& State = Frame->State;
+  const uint8_t ContextTop = State.flags[X86State::X87FLAG_TOP_LOC] & 7;
+  for (uint32_t Slot = 0; Slot < 8; ++Slot) {
+    if (!(ValueMask & (1U << Slot))) {
+      continue;
+    }
+
+    const uint8_t Location = Locations[Slot];
+    __uint128_t Value;
+    if (Location & CPU::CPUBackend::X87StackMapInSpillSlot) {
+      memcpy(&Value, reinterpret_cast<const void*>(HostSP + SpillSlots[Slot] * CPU::CPUBackend::MaxSpillSlotSize), sizeof(Value));
+    } else {
+      Value = HostVRegs[Location & CPU::CPUBackend::X87StackMapRegister];
+    }
+
+    // As FlushCachedRegs and X87PCStoreLiveOut write the register slot: an
+    // 80-bit float, or in reduced precision a 64-bit float, with the 32-bit
+    // float it came from or the integer from FILD m64 in the upper half.
+    auto* Reg = State.mm[(ContextTop + Slot) & 7];
+    uint64_t Bits {};
+    memcpy(&Bits, &Value, sizeof(Bits));
+    switch ((Location >> CPU::CPUBackend::X87StackMapFormatShift) & 3) {
+    case CPU::CPUBackend::X87StackMapF80: memcpy(Reg, &Value, sizeof(Value)); break;
+    case CPU::CPUBackend::X87StackMapDouble:
+      if (Reduced) {
+        Reg[0] = Bits;
+        Reg[1] = 0;
+      } else {
+        softfloat_state SoftState {};
+        const X80SoftFloat Result(&SoftState, std::bit_cast<double>(Bits));
+        memcpy(Reg, &Result, sizeof(Result));
+        Reg[1] &= 0xffff;
+      }
+      break;
+    case CPU::CPUBackend::X87StackMapSingle: {
+      const auto SingleBits = static_cast<uint32_t>(Bits);
+      const float Single = std::bit_cast<float>(SingleBits);
+      if (Reduced) {
+        Reg[0] = std::bit_cast<uint64_t>(static_cast<double>(Single));
+        Reg[1] = SingleBits;
+      } else {
+        softfloat_state SoftState {};
+        const X80SoftFloat Result(&SoftState, Single);
+        memcpy(Reg, &Result, sizeof(Result));
+        Reg[1] &= 0xffff;
+      }
+      break;
+    }
+    case CPU::CPUBackend::X87StackMapInt64: {
+      const auto Integer = static_cast<int64_t>(Bits);
+      if (Reduced) {
+        Reg[0] = std::bit_cast<uint64_t>(static_cast<double>(Integer));
+        Reg[1] = Bits;
+      } else {
+        // FILD m64 only keeps its integer in reduced precision.
+        const uint64_t Magnitude = Integer < 0 ? 0 - Bits : Bits;
+        auto Result = ui64_to_extF80(Magnitude);
+        Result.signExp |= Integer < 0 ? 0x8000 : 0;
+        memcpy(&Reg[0], &Result.signif, sizeof(Reg[0]));
+        Reg[1] = Result.signExp;
+      }
+      break;
+    }
+    }
+  }
+
+  const auto Rotate = [ContextTop](uint8_t Mask) {
+    return static_cast<uint8_t>((Mask << ContextTop) | (Mask >> ((8 - ContextTop) & 7)));
+  };
+  State.AbridgedFTW = (State.AbridgedFTW | Rotate(ValidMask)) & ~Rotate(EmptyMask);
+  State.flags[X86State::X87FLAG_TOP_LOC] = (ContextTop - Push) & 7;
 }
 
 uint32_t ContextImpl::ReconstructCompactedEFLAGS(FEXCore::Core::InternalThreadState* Thread, bool WasInJIT, const uint64_t* HostGPRs,

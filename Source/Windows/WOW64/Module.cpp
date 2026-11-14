@@ -126,6 +126,10 @@ struct FrontendThreadData {
   // Set from the first to the second notification around a syscall that takes code away, see NotifyAroundSyscall
   bool HoldsCodeLock {};
   FEX::Windows::InvalidationTracker::FetchRetry LastFetchRetry {};
+  // The untracked write of an NtWriteVirtualMemory in progress, see __wine_notify_memory_write
+  bool InUntrackedWrite {};
+  uint64_t UntrackedWriteAddress {};
+  uint64_t UntrackedWriteSize {};
   CHPE_V2_CPU_AREA_INFO CpuArea {};
   // The guest's FPCR rounding mode and flush to zero when the thread last left the JIT, with the x87 control word and
   // MXCSR at that time, see Context::RestoreGuestFPCR.
@@ -171,6 +175,8 @@ std::optional<FEX::Windows::InvalidationTracker> InvalidationTracker;
 std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
 std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
 std::optional<FEX::Windows::ImageTracker> ImageTracker;
+// Set before BTCpuProcessInit by a Wine that calls __wine_fix_memory_info after each query of the guest
+bool WineFixesMemoryInfo {};
 
 // With reduced precision x87, x87 arithmetic rounds by FPCR, see FPCRForControlWords.
 bool X87ReducedPrecision {};
@@ -318,10 +324,11 @@ private:
 
 // Wine's wow64 queues the memory notifications and instruction cache flushes that other processes make for this one,
 // and a thread of this one processes them at its next syscall or compile. The two notifications around a syscall become
-// two items there, which different threads can process, and the second one is lost when the queue is full. Holding
-// ThreadCreationMutex from the first to the second, as around a syscall of this process, could keep it held for long or
-// for good, and orders nothing, as the other process makes its syscall without waiting for this one. So for queued
-// items the first notification does nothing, and the second one takes the mutex only for its own work.
+// two items there, which different threads can process, and when the queue is full Wine drops the work and has FEX flush
+// all code instead, see BTCpuFlushInstructionCacheHeavy. Holding ThreadCreationMutex from the first to the second, as
+// around a syscall of this process, could keep it held for long or for good, and orders nothing, as the other process
+// makes its syscall without waiting for this one. So for queued items the first notification does nothing, and the
+// second one takes the mutex only for its own work.
 void ProcessCrossProcessWork() {
   auto* Data = GetFrontendThreadData(GetTLS().ThreadState());
   const bool Prev = Data->InCrossProcessWork;
@@ -331,6 +338,7 @@ void ProcessCrossProcessWork() {
 }
 
 // Handles a notification of a pair around a syscall, with Work done in the second one (After), see ProcessCrossProcessWork.
+// Work's second argument says whether the notification is a queued one of another process.
 // Around a syscall of this process, the thread stays in the syscall callback state from the first to the second.
 // If TakesCodeAway returns true, which it does with ThreadCreationMutex held, the code invalidation mutex is held from the
 // first notification to the end of Work, which gets true for that, see InvalidationTracker::ProtectTakesCodeAway. wow64
@@ -344,7 +352,7 @@ bool NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
   if (Data && Data->InCrossProcessWork) {
     if (After) {
       std::scoped_lock Lock(ThreadCreationMutex);
-      Work(false);
+      Work(false, true);
     }
     return false;
   }
@@ -361,7 +369,7 @@ bool NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
     }
   } else {
     const bool CodeLockHeld = Data && std::exchange(Data->HoldsCodeLock, false);
-    Work(CodeLockHeld);
+    Work(CodeLockHeld, false);
     if (CodeLockHeld) {
       CTX->GetCodeInvalidationMutex().unlock();
     }
@@ -888,7 +896,7 @@ void BTCpuProcessInit() {
   CTX->SetSyscallHandler(SyscallHandler.get());
   CTX->InitCore();
   Context::HandlerConfig.emplace();
-  InvalidationTracker.emplace(*CTX, Threads);
+  InvalidationTracker.emplace(*CTX, Threads, WineFixesMemoryInfo);
   ImageTracker.emplace(*CTX, false);
 
   auto MainModule = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->ImageBaseAddress;
@@ -1195,6 +1203,10 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
       TLS.CpuArea() = nullptr;
     }
     AreaSwitch.TornDown = true;
+    // Terminated in the middle of an untracked write, see __wine_notify_memory_write
+    if (const auto* FrontendData = GetFrontendThreadData(ThreadState); FrontendData->InUntrackedWrite) {
+      InvalidationTracker->EndUntrackedWrite(FrontendData->UntrackedWriteAddress, FrontendData->UntrackedWriteSize);
+    }
     delete GetFrontendThreadData(ThreadState);
 
     // GDT and LDT are mirrored, only free one.
@@ -1385,7 +1397,64 @@ void BTCpuFlushInstructionCache2(const void* Address, SIZE_T Size) {
 void BTCpuFlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
   ScopedSyscallCallback Callback;
   std::scoped_lock Lock(ThreadCreationMutex);
+  // Wine flushes everything without a range when it dropped queued work, see ProcessCrossProcessWork
+  if (!Address && !Size) {
+    InvalidationTracker->HandleCrossProcessWorkLost();
+  }
   InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), false);
+}
+
+void __wine_fix_memory_info(MEMORY_BASIC_INFORMATION* Info) {
+  // Wine calls this once without a query, before BTCpuProcessInit, to say that it passes on every query this process
+  // makes of its own memory
+  if (!Info) {
+    WineFixesMemoryInfo = true;
+    return;
+  }
+  if (!InvalidationTracker || !GetTLS().ThreadState()) {
+    return;
+  }
+  ScopedSyscallCallback Callback;
+  InvalidationTracker->FixMemoryInfo(*Info);
+}
+
+// Wine calls this around NtWriteVirtualMemory into this process. The wineserver writes the memory, which faults on a page
+// FEX trapped, so the pages are made writable for the write and code compiled from them meanwhile is dropped at its end,
+// see BeginUntrackedWrite. A query reports such a page writable, so kernelbase's WriteProcessMemory doesn't protect it
+// first. Wine also calls it around the second try of NtReadVirtualMemory and NtQuerySystemInformation, whose unix side
+// writes the buffer the same way, after the first one failed with STATUS_ACCESS_VIOLATION.
+void __wine_notify_memory_write(void* Address, SIZE_T Size, BOOL After) {
+  auto* ThreadState = GetTLS().ThreadState();
+  if (!InvalidationTracker || !ThreadState || !Address || !Size) {
+    return;
+  }
+
+  auto* FrontendData = GetFrontendThreadData(ThreadState);
+  if (!After) {
+    // The lookup takes IntervalsLock, a FEX lock, see EnterSyscallCallback
+    if (ScopedSyscallCallback Callback; !InvalidationTracker->MayBeTrapped(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
+      return;
+    }
+    // The thread stays in the syscall callback state until the second call, as around the syscalls of NotifyAroundSyscall,
+    // so that a suspend during the write doesn't keep the range untracked
+    FrontendData->NotifyEnteredSyscallCallback = EnterSyscallCallback();
+    {
+      std::scoped_lock Lock(ThreadCreationMutex);
+      FrontendData->UntrackedWriteAddress = reinterpret_cast<uint64_t>(Address);
+      FrontendData->UntrackedWriteSize = static_cast<uint64_t>(Size);
+      FrontendData->InUntrackedWrite = InvalidationTracker->BeginUntrackedWrite(FrontendData->UntrackedWriteAddress, FrontendData->UntrackedWriteSize);
+    }
+    if (!FrontendData->InUntrackedWrite) {
+      LeaveSyscallCallback(std::exchange(FrontendData->NotifyEnteredSyscallCallback, false));
+    }
+  } else if (FrontendData->InUntrackedWrite) {
+    {
+      std::scoped_lock Lock(ThreadCreationMutex);
+      FrontendData->InUntrackedWrite = false;
+      InvalidationTracker->EndUntrackedWrite(FrontendData->UntrackedWriteAddress, FrontendData->UntrackedWriteSize);
+    }
+    LeaveSyscallCallback(std::exchange(FrontendData->NotifyEnteredSyscallCallback, false));
+  }
 }
 
 void BTCpuNotifyMemoryDirty(void* Address, SIZE_T Size) {
@@ -1398,10 +1467,15 @@ void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, 
   const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->AllocTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Type, Prot); },
-    [&](bool CodeLockHeld) {
+    [&](bool CodeLockHeld, bool Queued) {
       // Reserved memory can't be read, whatever its protection, and MEM_RESET(_UNDO) ignores the passed permissions
       if (!Status && (Type & MEM_COMMIT) && !(Type & (MEM_RESET | MEM_RESET_UNDO))) {
-        InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot, CodeLockHeld);
+        if (Queued) {
+          InvalidationTracker->HandleCrossProcessProtectNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
+        } else {
+          InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot,
+                                                                  CodeLockHeld);
+        }
       }
     });
   if (CodeLockTaken) {
@@ -1413,8 +1487,13 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
   const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->ProtectTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt); },
-    [&](bool CodeLockHeld) {
-      if (!Status) {
+    [&](bool CodeLockHeld, bool Queued) {
+      if (Status) {
+        return;
+      }
+      if (Queued) {
+        InvalidationTracker->HandleCrossProcessProtectNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
+      } else {
         InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt,
                                                                 CodeLockHeld);
       }
@@ -1427,7 +1506,7 @@ void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL Af
 void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, ULONG Status) {
   NotifyAroundSyscall(
     After, [&] { return InvalidationTracker->FreeTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size)); },
-    [&](bool CodeLockHeld) {
+    [&](bool CodeLockHeld, bool) {
       if (!Status) {
         InvalidationTracker->HandleMemoryFreeNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), CodeLockHeld);
       }

@@ -24,3 +24,5 @@ EXPORTS
   BTCpuThreadTerm
   BTCpuUpdateProcessorInformation
   __wine_get_unix_opcode
+  __wine_fix_memory_info
+  __wine_notify_memory_write

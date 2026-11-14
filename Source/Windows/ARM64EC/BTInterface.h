@@ -22,4 +22,8 @@ void STDMETHODCALLTYPE BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size);
 void STDMETHODCALLTYPE BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status);
 BOOLEAN STDMETHODCALLTYPE BTCpu64IsProcessorFeaturePresent(UINT Feature);
 void STDMETHODCALLTYPE UpdateProcessorInformation(SYSTEM_CPU_INFORMATION* Info);
+// Wine's: called after each MemoryBasicInformation query of the guest, see InvalidationTracker::FixMemoryInfo
+void STDMETHODCALLTYPE __wine_fix_memory_info(MEMORY_BASIC_INFORMATION* Info);
+// Wine's: called before and after NtWriteVirtualMemory into this process
+void STDMETHODCALLTYPE __wine_notify_memory_write(void* Address, SIZE_T Size, BOOL After);
 }

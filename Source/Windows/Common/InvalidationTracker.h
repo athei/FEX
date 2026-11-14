@@ -5,6 +5,7 @@
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <FEXCore/fextl/map.h>
 #include <FEXCore/fextl/vector.h>
+#include <atomic>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -19,15 +20,30 @@ namespace FEXCore::Context {
 class Context;
 }
 
+struct _MEMORY_BASIC_INFORMATION;
+
 namespace FEX::Windows {
 /**
  * @brief Handles SMC and regular code invalidation
  */
 class InvalidationTracker {
 public:
-  InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads);
+  // GuestQueriesFixed is true when Wine passes every query this process makes of its own memory to FixMemoryInfo
+  InvalidationTracker(FEXCore::Context::Context& CTX, const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads,
+                      bool GuestQueriesFixed = false);
+  // Wine reports the trap's protection for a page FEX trapped. Called with a successful MemoryBasicInformation query this
+  // process made of its own memory, this makes it the protection the guest gave the page, and the region the one the
+  // guest would see.
+  void FixMemoryInfo(_MEMORY_BASIC_INFORMATION& Info);
+  // Whether the range has RWX intervals once FEX trapped a page, so that a write into it from outside of the JIT needs
+  // BeginUntrackedWrite. Takes no lock but IntervalsLock shared.
+  bool MayBeTrapped(uint64_t Address, uint64_t Size);
   // CodeLockHeld is true when the caller holds the code invalidation mutex, see ProtectTakesCodeAway
   void HandleMemoryProtectionNotification(uint64_t Address, uint64_t Size, ULONG Prot, bool CodeLockHeld = false);
+  // The same for a protect or commit that another process made and queued for this one, see ProcessCrossProcessWork
+  void HandleCrossProcessProtectNotification(uint64_t Address, uint64_t Size, ULONG Prot);
+  // Called when Wine dropped queued work, which it does when the list was full
+  void HandleCrossProcessWorkLost();
   void HandleProcessExecuteFlagsChange(ULONG Flags);
   void HandleImageMap(std::string_view Name, uint64_t Address);
   struct InvalidateContainingSectionResult {
@@ -121,6 +137,8 @@ private:
 
   FEXCore::IntervalList<uint64_t> XIntervals;
   FEXCore::IntervalList<uint64_t> RWXIntervals;
+  // On ARM64EC, an NtQueryVirtualMemory outside of the syscall callback state goes through Wine's wrapper to
+  // FixMemoryInfo, which takes this lock shared. So FEX makes every query with this lock held in that state.
   std::shared_mutex IntervalsLock;
   FEXCore::Context::Context& CTX;
   const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads;
@@ -131,9 +149,16 @@ private:
   fextl::vector<std::pair<uint64_t, uint64_t>> UntrackedWrites;
   // The parts of RWXIntervals FEX trapped since they entered it, see HandleMemoryProtectionNotification. Changed with
   // IntervalsLock held exclusively, or held shared and TrappedIntervalsLock held, and read with IntervalsLock held
-  // exclusively.
+  // exclusively, or held shared and TrappedIntervalsLock held.
   FEXCore::IntervalList<uint64_t> TrappedIntervals;
   std::mutex TrappedIntervalsLock;
+  // The pages FEX trapped that another process then gave another protection, which a protect of that process to
+  // read-only may give the trap's protection back, see HandleCrossProcessProtectNotification. Only queued work and the
+  // removals of TrappedIntervals change it, with IntervalsLock held exclusively; it has no lock of its own.
+  FEXCore::IntervalList<uint64_t> OtherProtectedIntervals;
+  // Set once FEX trapped a page, so FixMemoryInfo has nothing to do before
+  std::atomic<bool> AnyTrapped {false};
+  const bool GuestQueriesFixed;
   // [begin, end) of the section between its InvalidateContainingSection and FinishSectionUnmap, and whether a compile
   // asked about it meanwhile, protected by IntervalsLock
   std::pair<uint64_t, uint64_t> UnmappingSection {};

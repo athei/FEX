@@ -263,8 +263,9 @@ void ProcessCrossProcessWork() {
 // doesn't call these hooks for FEX's own syscalls, as a compile runs in the syscall callback state, so no compile is
 // waited for by the thread running it, and a suspend or termination of the thread waits for the end of the second one.
 // That is not done for queued items: the other process doesn't wait for this one, so it can't be held off by a lock here.
+// Returns whether the first notification took the code invalidation mutex.
 template<typename TakesCodeAwayFunc, typename WorkFunc>
-void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc&& Work) {
+bool NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc&& Work) {
   auto* Thread = GetCPUArea().ThreadState();
   auto* Data = Thread->FrontendPtr ? GetFrontendThreadData(Thread) : nullptr;
   if (Data && Data->InCrossProcessWork) {
@@ -272,7 +273,7 @@ void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
       std::scoped_lock Lock(ThreadCreationMutex);
       Work(false);
     }
-    return;
+    return false;
   }
 
   if (!After) {
@@ -280,6 +281,7 @@ void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
     if (Data && TakesCodeAway()) {
       CTX->GetCodeInvalidationMutex().lock();
       Data->HoldsCodeLock = true;
+      return true;
     }
   } else {
     const bool CodeLockHeld = Data && std::exchange(Data->HoldsCodeLock, false);
@@ -289,6 +291,7 @@ void NotifyAroundSyscall(BOOL After, TakesCodeAwayFunc&& TakesCodeAway, WorkFunc
     }
     ThreadCreationMutex.unlock();
   }
+  return false;
 }
 
 bool IsEmulatorStackAddress(const ThreadCPUArea CPUArea, uint64_t Address) {
@@ -1337,7 +1340,7 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
     return;
   }
 
-  NotifyAroundSyscall(
+  const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->AllocTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Type, Prot); },
     [&](bool CodeLockHeld) {
@@ -1346,6 +1349,9 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
         InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot, CodeLockHeld);
       }
     });
+  if (CodeLockTaken) {
+    InvalidationTracker->UntrapForProtect(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
+  }
 }
 
 void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
@@ -1367,7 +1373,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
     return;
   }
 
-  NotifyAroundSyscall(
+  const bool CodeLockTaken = NotifyAroundSyscall(
     After,
     [&] { return InvalidationTracker->ProtectTakesCodeAway(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt); },
     [&](bool CodeLockHeld) {
@@ -1376,6 +1382,9 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
                                                                 CodeLockHeld);
       }
     });
+  if (CodeLockTaken) {
+    InvalidationTracker->UntrapForProtect(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
+  }
 }
 
 NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {

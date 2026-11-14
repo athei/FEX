@@ -48,7 +48,11 @@ public:
   // say what was executable when the compile asked. A compile running after the syscall but before the intervals are
   // updated would also protect a page that just became writable, see ProtectRWXIntervalsInternal. Called with
   // ThreadCreationMutex held, before the syscall, so with the arguments the syscall got, not the range it will use.
+  // Also true where the range has RWX intervals, for UntrapForProtect.
   bool ProtectTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Prot);
+  // Called after ProtectTakesCodeAway or AllocTakesCodeAway returned true, with the code invalidation mutex held. Makes
+  // the pages FEX trapped in the range writable again, so the syscall reports the guest's protection as the old one.
+  void UntrapForProtect(uint64_t Address, uint64_t Size);
   // The same for an allocation syscall: a commit over existing memory sets the protection like a protect does
   bool AllocTakesCodeAway(uint64_t Address, uint64_t Size, ULONG Type, ULONG Prot);
   // The same for a free syscall, which takes code away where the range, or the allocation for a size of 0, is in the
@@ -125,6 +129,11 @@ private:
   FEXCore::IntervalList<uint64_t> DEPPromotedIntervals; // Protected by IntervalsLock
   // Page aligned [begin, end) of each untracked write in progress, protected by IntervalsLock
   fextl::vector<std::pair<uint64_t, uint64_t>> UntrackedWrites;
+  // The parts of RWXIntervals FEX trapped since they entered it, see HandleMemoryProtectionNotification. Changed with
+  // IntervalsLock held exclusively, or held shared and TrappedIntervalsLock held, and read with IntervalsLock held
+  // exclusively.
+  FEXCore::IntervalList<uint64_t> TrappedIntervals;
+  std::mutex TrappedIntervalsLock;
   // [begin, end) of the section between its InvalidateContainingSection and FinishSectionUnmap, and whether a compile
   // asked about it meanwhile, protected by IntervalsLock
   std::pair<uint64_t, uint64_t> UnmappingSection {};

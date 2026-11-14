@@ -103,9 +103,10 @@ void SignalDelegator::RegisterHostSignalHandler(int Signal, HostSignalDelegatorF
   FrontendRegisterHostSignalHandler(Signal, Required);
 }
 
-void SignalDelegator::SpillSRA(FEXCore::Core::InternalThreadState* Thread, void* ucontext, uint32_t IgnoreMask) {
+void SignalDelegator::SpillSRA(FEXCore::Core::InternalThreadState* Thread, void* ucontext, uint32_t IgnoreMask, uint64_t HostSP) {
 #ifdef ARCHITECTURE_arm64
   Thread->CurrentFrame->State.rip = CTX->RestoreRIPFromHostPC(Thread, ArchHelpers::Context::GetPc(ucontext));
+  CTX->ReconstructX87State(Thread, ArchHelpers::Context::GetPc(ucontext), ArchHelpers::Context::GetArmFPRs(ucontext), HostSP);
 
   for (size_t i = 0; i < Config.SRAGPRCount; i++) {
     const uint8_t SRAIdxMap = Config.SRAGPRMapping[i];
@@ -283,6 +284,9 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 
 bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext,
                                                   GuestSigAction* GuestAction, stack_t* GuestStack) {
+  // The SP of the interrupted code, which its spill slots are relative to. StoreThreadState moves the SP below the
+  // backup it writes.
+  const uint64_t HostSP = ArchHelpers::Context::GetSp(ucontext);
   auto ContextBackup = StoreThreadState(Thread, Signal, ucontext);
 
   auto Frame = Thread->CurrentFrame;
@@ -313,7 +317,7 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
 #endif
 
     // We are in jit, SRA must be spilled
-    SpillSRA(Thread, ucontext, IgnoreMask);
+    SpillSRA(Thread, ucontext, IgnoreMask, HostSP);
 
     ContextBackup->Flags |= ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_INJIT;
 

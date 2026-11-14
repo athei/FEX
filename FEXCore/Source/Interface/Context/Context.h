@@ -154,6 +154,7 @@ public:
 
   uint64_t RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) override;
   bool IsCodeValidationRead(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) const override;
+  void ReconstructX87State(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, const __uint128_t* HostVRegs, uint64_t HostSP) override;
   uint32_t ReconstructCompactedEFLAGS(FEXCore::Core::InternalThreadState* Thread, bool WasInJIT, const uint64_t* HostGPRs, uint64_t PSTATE) override;
   void SetFlagsFromCompactedEFLAGS(FEXCore::Core::InternalThreadState* Thread, uint32_t EFLAGS) override;
 

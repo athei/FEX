@@ -144,7 +144,8 @@ public:
 
   void SaveTelemetry();
 
-  void SpillSRA(FEXCore::Core::InternalThreadState* Thread, void* ucontext, uint32_t IgnoreMask);
+  // HostSP is the SP of the interrupted JIT code, which the block's spill slots are relative to.
+  void SpillSRA(FEXCore::Core::InternalThreadState* Thread, void* ucontext, uint32_t IgnoreMask, uint64_t HostSP);
 
 private:
   enum DefaultBehaviourType {

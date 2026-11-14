@@ -139,6 +139,27 @@ private:
   void EmitX87PCWideBinop(uint8_t Op, uint8_t SingleMask, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1, ARMEmitter::VRegister Src2);
   void EmitX87PCBinop(uint8_t Op, ARMEmitter::ScalarRegSize Size, ARMEmitter::VRegister Dst, ARMEmitter::VRegister Src1, ARMEmitter::VRegister Src2);
 
+  // The X87StackMap entries of the block for its tail, see JITCodeTail, the
+  // number of them, the offset of the last one, the contents of the last one
+  // without X87StackMapUnknown, which the next one is written as the changes
+  // to, whether an X87StackMapUnknown one followed, and whether the block is
+  // in reduced precision.
+  struct X87StackMapState {
+    uint8_t Push;
+    uint8_t ValidMask;
+    uint8_t EmptyMask;
+    uint8_t ValueMask;
+    std::array<uint8_t, 8> Location;
+    std::array<uint32_t, 8> SpillSlot;
+    bool operator==(const X87StackMapState&) const = default;
+  };
+  fextl::vector<uint8_t> X87StackMapData;
+  uint32_t X87StackMapCount {};
+  uint64_t X87StackMapOffset {};
+  X87StackMapState X87StackMapLast {};
+  bool X87StackMapLastUnknown {};
+  bool X87StackMapReduced {};
+
   FEXCore::Context::ContextImpl* CTX {};
   const FEXCore::IR::IRListView* IR {};
   uint64_t Entry {};

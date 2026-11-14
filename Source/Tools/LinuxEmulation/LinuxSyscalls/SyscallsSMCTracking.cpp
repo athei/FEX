@@ -122,7 +122,8 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
       // If we are not in a single-instruction block, and the SMC write address could intersect with the current block,
       // reconstruct the context and repeat the faulting instruction as a single-instruction block so any SMC it performs
       // is immediately picked up.
-      ThreadObject->SignalInfo.Delegator->SpillSRA(Thread, ucontext, Thread->CurrentFrame->InSyscallInfo & 0xFFFF);
+      ThreadObject->SignalInfo.Delegator->SpillSRA(Thread, ucontext, Thread->CurrentFrame->InSyscallInfo & 0xFFFF,
+                                                   ArchHelpers::Context::GetSp(ucontext));
 
       // Adjust context to return to the dispatcher, reloading SRA from thread state
       const auto& Config = ThreadObject->SignalInfo.Delegator->GetConfig();

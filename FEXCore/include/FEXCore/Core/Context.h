@@ -90,6 +90,18 @@ public:
   ///< stands in for the fetch of the instruction at the RIP RestoreRIPFromHostPC gives for it.
   FEX_DEFAULT_VISIBILITY virtual bool IsCodeValidationRead(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) const = 0;
   /**
+   * @brief Writes the x87 state that the block at HostPC has not written back yet to the thread state.
+   *
+   * @param Thread The thread getting the state reconstructed
+   * @param HostPC The host PC inside the JIT
+   * @param HostVRegs The host Arm64 vector registers at that point
+   * @param HostSP The host SP at that point, which the block's spill slots are relative to
+   *
+   * Does nothing if HostPC is outside the current block.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void
+  ReconstructX87State(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, const __uint128_t* HostVRegs, uint64_t HostSP) = 0;
+  /**
    * @brief Reconstructs a compacted EFLAGS from FEX's internal EFLAG representation.
    *
    * @param Thread The thread getting the state reconstructed

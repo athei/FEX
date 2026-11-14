@@ -650,6 +650,7 @@ void ReconstructThreadState(CONTEXT* Context) {
   auto& State = Thread->CurrentFrame->State;
 
   State.rip = CTX->RestoreRIPFromHostPC(Thread, Context->Pc);
+  CTX->ReconstructX87State(Thread, Context->Pc, reinterpret_cast<const __uint128_t*>(Context->V), Context->Sp);
 
   // Spill all SRA GPRs
   for (size_t i = 0; i < Config.SRAGPRCount; i++) {

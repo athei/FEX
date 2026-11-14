@@ -95,7 +95,55 @@ namespace CPU {
       // If this block represents a single guest instruction.
       bool SingleInst;
 
-      uint8_t _Pad[3];
+      // If the RIP entries are followed by the X87StackMap entries: a vl64
+      // count, the vl64 number of spill slots of the block, a u8 that is 1
+      // for reduced precision, then each entry as its changes to the last
+      // entry without X87StackMapUnknown. Before the first, Push, the masks
+      // and the locations of all eight slots are 0.
+      //   vl64 HostPCOffset, the offset from the previous entry in instructions
+      //   u8 X87StackMapHeader: Push and which of the four masks follow, or
+      //     X87StackMapUnknown alone
+      //   u8 ValidMask, u8 EmptyMask, u8 ValueMask, u8 ChangedMask, those that follow
+      //   for each bit s of ChangedMask, the new location of slot s:
+      //     u8 X87StackMapLocation, then for a spill slot its vl64 number
+      // Slot s is the register (TOP + s) & 7 for the TOP in the context,
+      // which is ST((s + Push) & 7). Bit s of ValidMask and EmptyMask sets
+      // its tag to valid or empty, and bit s of ValueMask says that it has a
+      // value. A slot keeps its location until an entry changes it, also
+      // while it has no value, so the value is at the last location given
+      // for the slot. An entry holds for the host code from its offset up to
+      // the next one. Each guest instruction with an op that can fault starts
+      // with the entry for its state; an X87StackMapUnknown entry starts one
+      // without such an op after the state changed, and leaves the state in
+      // the context as it is, so no reconstruction is worse than none.
+      bool HasX87StackMap;
+
+      uint8_t _Pad[2];
+    };
+    // ReconstructX87State converts each to the register slot's format: an
+    // 80-bit float, or a 64-bit float with its upper half as FlushCachedRegs
+    // and X87PCStoreLiveOut write it.
+    enum X87StackMapFormat : uint8_t {
+      X87StackMapF80,
+      X87StackMapDouble,
+      X87StackMapSingle,
+      // A 64-bit integer from FILD m64.
+      X87StackMapInt64,
+    };
+    enum X87StackMapHeader : uint8_t {
+      X87StackMapPush = 7,
+      X87StackMapUnknown = 1 << 3,
+      X87StackMapHasValidMask = 1 << 4,
+      X87StackMapHasEmptyMask = 1 << 5,
+      X87StackMapHasValueMask = 1 << 6,
+      X87StackMapHasChangedMask = 1 << 7,
+    };
+    // The host V register, or 0 for a spill slot, the X87StackMapFormat and
+    // whether the value is in a spill slot.
+    enum X87StackMapLocation : uint8_t {
+      X87StackMapRegister = 0x1f,
+      X87StackMapFormatShift = 5,
+      X87StackMapInSpillSlot = 1 << 7,
     };
 
     /**
@@ -138,11 +186,11 @@ namespace CPU {
     [[nodiscard]]
     fextl::shared_ptr<CodeBuffer> CheckCodeBufferUpdate();
 
-  protected:
     // Max spill slot size in bytes. We need at most 32 bytes
     // to be able to handle a 256-bit vector store to a slot.
     constexpr static uint32_t MaxSpillSlotSize = 32;
 
+  protected:
     FEXCore::Core::InternalThreadState* ThreadState;
 
     // Acquires a new shared code buffer, setting `CurrentCodeBuffer` and returning a pointer to it.

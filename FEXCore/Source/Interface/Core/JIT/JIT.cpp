@@ -906,6 +906,12 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
   // A restart can move the host code, so the offsets of a previous attempt are stale.
   DebugData->Subblocks.clear();
   DebugData->GuestOpcodes.clear();
+  X87StackMapData.clear();
+  X87StackMapCount = 0;
+  X87StackMapOffset = 0;
+  X87StackMapLast = {};
+  X87StackMapLastUnknown = false;
+  X87StackMapReduced = false;
   // A restart inside a block with X87PC ops skips the reset at the end of that block.
   X87PCCopyStart = nullptr;
 
@@ -1224,6 +1230,15 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
     }
   }
 
+  if (X87StackMapCount) {
+    JITBlockTail.HasX87StackMap = true;
+    JITRIPEntriesLocation += FEXCore::Utils::vl64::Encode(JITRIPEntriesLocation, X87StackMapCount);
+    JITRIPEntriesLocation += FEXCore::Utils::vl64::Encode(JITRIPEntriesLocation, SpillSlots);
+    *JITRIPEntriesLocation++ = X87StackMapReduced;
+    memcpy(JITRIPEntriesLocation, X87StackMapData.data(), X87StackMapData.size());
+    JITRIPEntriesLocation += X87StackMapData.size();
+  }
+
   SetCursorOffset(JITRIPEntriesLocation - CodeData.BlockBegin);
   // Make sure code is 16B aligned on the tail.
   // Can't use Align16B here as vl64pair can cause non-4byte alignment.
@@ -1279,6 +1294,8 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
     LogMan::Msg::IFmt("Guest Code instructions: {}", HeaderOp->NumHostInstructions);
     LogMan::Msg::IFmt("Host Code instructions: {}", CodeOnlySize >> 2);
     LogMan::Msg::IFmt("Blow-up Amt: {}x", double(CodeOnlySize >> 2) / double(HeaderOp->NumHostInstructions));
+    LogMan::Msg::IFmt("Tail: {} bytes, RIP entries: {}, X87StackMap entries: {} in {} bytes", CodeData.Size - CodeOnlySize - sizeof(JITCodeHeader),
+                      DebugData->GuestOpcodes.size(), X87StackMapCount, X87StackMapData.size());
   }
 
   if (Disassemble() & FEXCore::Config::Disassemble::BLOCKS) {

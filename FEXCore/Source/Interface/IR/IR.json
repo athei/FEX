@@ -203,6 +203,48 @@
         "HasSideEffects": true
       },
 
+      "X87StackMap u8:$Push, u8:$ValidMask, u8:$EmptyMask, u8:$SingleMask, u16:$SourceMask, i1:$Reduced, i1:$Unknown, FPR:$ST0, FPR:$ST1, FPR:$ST2, FPR:$ST3, FPR:$ST4, FPR:$ST5, FPR:$ST6, FPR:$ST7": {
+        "Desc": [
+          "Metadata of the x87 stack pass, which emits no code: the x87 state that the code from here on has not written to",
+          "the context yet, for ReconstructX87State to write when a fault interrupts the block.",
+          "TOP is Push pushes past the TOP in the context. ST0 to ST7 are the values of ST(i) relative to that TOP, Invalid",
+          "where the context holds the value. Bit i of ValidMask and EmptyMask sets the tag of ST(i) to valid or empty.",
+          "Bit i of SingleMask says that ST(i) is dual, see X87PCBinop. Reduced says that the values are 64-bit floats rather",
+          "than 80-bit ones. Bits 2i and 2i+1 of SourceMask, X87StackMapSource, say that ST(i) is instead the operand that",
+          "FLD m32, FLD m64 or FILD m64 loaded, as the block has no other use of its conversion: FST or FISTP of the same size",
+          "stores the operand itself, and the conversion is left out.",
+          "Unknown, with no values, says that the state from here on is not recorded, at a guest instruction without an op",
+          "that can fault after the state changed since the last X87StackMap: ReconstructX87State then leaves the context",
+          "as it is.",
+          "The register allocator replaces each value with its location, a register or a spill slot, without filling it,",
+          "and emits another X87StackMap when it spills a value that the last one has in a register."
+        ],
+        "HasSideEffects": true
+      },
+
+      "X87StackKeep FPR:$Keep0, FPR:$Keep1, FPR:$Keep2, FPR:$Keep3, FPR:$Keep4, FPR:$Keep5, FPR:$Keep6, FPR:$Keep7": {
+        "Desc": [
+          "Metadata of the x87 stack pass, which emits no code. Follows the last memory access of a guest instruction and",
+          "reads the values of its X87StackMap ops, without filling them, so that their registers aren't reused before that",
+          "access: FSTP and FISTP store after the last use of the value they pop, and a later instruction can pop or",
+          "overwrite a value without reading it."
+        ],
+        "HasSideEffects": true,
+        "JITDispatchOverride": "NoOp"
+      },
+
+      "X87StoreSingle OpSize:#Size, FPR:$Value, GPR:$Addr, GPR:$Offset, MemOffsetType:$OffsetType, u8:$OffsetScale, i1:$Dual, i1:$Copy": {
+        "Desc": [
+          "FST m32 in reduced precision: stores Value as a 32-bit float, rounding with the host rounding mode, as Float_FToF",
+          "and StoreMem do. Dual says that Value is dual, see X87PCBinop: Precision24 stores it as it is, through a copy if",
+          "Copy is set. Copy says that the instruction leaves Value on the stack.",
+          "Value is read by the store itself, so it stays in its register up to the access, for X87StackMap."
+        ],
+        "Inline": ["", "", "Mem"],
+        "HasSideEffects": true,
+        "DestSize": "Size"
+      },
+
       "GPR = ValidateCode GPR:$crc, GPR:$Address, u8:$CodeLength": {
         "HasSideEffects": true,
         "HasDest": true,

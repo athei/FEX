@@ -150,6 +150,7 @@ DEF_OP(CRC32) {
   const auto Src1 = GetReg(Op->Src1);
   const auto Src2 = GetReg(Op->Src2);
 
+  // Only CRC32C: IsCodeValidationRead takes a load followed by a plain CRC32 for ValidateCode
   switch (Op->SrcSize) {
   case IR::OpSize::i8Bit: crc32cb(Dst.W(), Src1.W(), Src2.W()); break;
   case IR::OpSize::i16Bit: crc32ch(Dst.W(), Src1.W(), Src2.W()); break;

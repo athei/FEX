@@ -328,6 +328,9 @@ DEF_OP(ValidateCode) {
   const auto Dst = GetReg(Node);
   const auto CRC32Reg = GetReg(Op->crc);
 
+  // A load into TMP3 from TMP2 followed by a CRC32 (not CRC32C) of TMP3 into TMP1 is how IsCodeValidationRead tells a
+  // fault in these loads, the instruction's fetch fault, from the guest's own reads. Keep the pair and its registers,
+  // and keep these the only CRC32s.
   // Changes to TMP1
   auto WorkingReg = ARMEmitter::XReg::zr;
   auto BaseReg = TMP2;

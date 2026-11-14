@@ -86,6 +86,9 @@ public:
   ///< State reconstruction helpers
   ///< Reconstructs the guest RIP from the passed in thread context and related Host PC.
   FEX_DEFAULT_VISIBILITY virtual uint64_t RestoreRIPFromHostPC(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) = 0;
+  ///< Whether the instruction at HostPC in JIT code reads the guest's code for a full SMC check (ValidateCode), which
+  ///< stands in for the fetch of the instruction at the RIP RestoreRIPFromHostPC gives for it.
+  FEX_DEFAULT_VISIBILITY virtual bool IsCodeValidationRead(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC) const = 0;
   /**
    * @brief Reconstructs a compacted EFLAGS from FEX's internal EFLAG representation.
    *

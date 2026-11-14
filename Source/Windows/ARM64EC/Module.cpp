@@ -1238,6 +1238,15 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
 
 NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestContext, ARM64_NT_CONTEXT* NativeContext) {
   bool Cont {};
+  {
+    // The tracker can allocate with IntervalsLock held, see ResetToConsistentStateImpl
+    ScopedCallbackDisable guard;
+    Cont = FEX::Windows::HandleFaultSafeCopyFault(InvalidationTracker ? &*InvalidationTracker : nullptr, *Exception, NativeContext->Pc);
+  }
+  if (Cont) {
+    NtContinueNative(NativeContext, false);
+  }
+
   if (FEX::Windows::IsDataAccessViolation(*Exception)) {
     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
 

@@ -3,6 +3,7 @@
 
 #include <FEXCore/Utils/CompilerDefs.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <optional>
 
@@ -34,4 +35,21 @@ enum class UnalignedHandlerType {
 [[nodiscard]]
 FEX_DEFAULT_VISIBILITY std::optional<int32_t> HandleUnalignedAccess(
   FEXCore::Core::InternalThreadState* Thread, UnalignedHandlerType HandleType, uintptr_t ProgramCounter, uint64_t* GPRs, bool IsJIT = true);
+
+/**
+ * @brief Copies Size bytes from Src to Dst, for reads of memory that can go away at any moment, such as guest code.
+ *
+ * A fault in a read of Src ends the copy when the frontend's fault handler resumes it at `FaultSafeCopyResumePC`. On
+ * Windows that is the handler's first step, which takes only the InvalidationTracker's IntervalsLock, so a caller must
+ * not hold that one. Without that the fault is raised as from any other read.
+ *
+ * @return The number of bytes copied. The reads are 8 bytes wide while 8 remain, so where one straddles two pages and the
+ * second faults, the readable bytes it covers on the first are not copied either.
+ */
+FEX_DEFAULT_VISIBILITY size_t FaultSafeCopy(void* Dst, const void* Src, size_t Size);
+
+/**
+ * @brief The host PC to resume a fault at ProgramCounter at, if that is a read of `FaultSafeCopy`, or 0.
+ */
+FEX_DEFAULT_VISIBILITY uint64_t FaultSafeCopyResumePC(uint64_t ProgramCounter);
 } // namespace FEXCore::ArchHelpers::Arm64

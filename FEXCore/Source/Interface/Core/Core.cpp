@@ -44,6 +44,7 @@ $end_info$
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <FEXCore/HLE/SourcecodeResolver.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/Event.h>
 #include <FEXCore/Utils/File.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -529,6 +530,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
   uint64_t TotalInstructionsLength {0};
 
   bool HasCustomIR {};
+  bool HasConstantCodeCheck {};
 
   bool WantsDiskCachePatching = DiskCache.IsReadingDiskCache() || DiskCache.IsWritingDiskCache();
 
@@ -652,11 +654,20 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 
-          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
-          auto CRC = WantsDiskCachePatching ?
-                       Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
-                       Thread->OpDispatcher->Constant(Value);
-          auto CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, DecodedInfo->InstSize);
+          // Fault-safe, as the decoder's reads are, see Decoder::FetchInstBytes. Bytes that went away since the decoder
+          // read them count as changed, so the block drops itself here, and the next compile stops at them.
+          std::array<uint8_t, 16> Code;
+          IR::Ref CodeChanged {};
+          if (FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Code.data(), ExistingCodePtr, DecodedInfo->InstSize) == DecodedInfo->InstSize) {
+            auto Value = FEXCore::Utils::crc32(Code.data(), DecodedInfo->InstSize);
+            auto CRC = WantsDiskCachePatching ?
+                         Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
+                         Thread->OpDispatcher->Constant(Value);
+            CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, DecodedInfo->InstSize);
+          } else {
+            CodeChanged = Thread->OpDispatcher->Constant(1);
+            HasConstantCodeCheck = true;
+          }
 
           auto InvalidateCodeCond = Thread->OpDispatcher->CondJump(CodeChanged);
 
@@ -800,6 +811,7 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
     .StartAddr = Thread->FrontendDecoder->DecodedMinAddress,
     .Length = Thread->FrontendDecoder->DecodedMaxAddress - Thread->FrontendDecoder->DecodedMinAddress,
     .NeedsAddGuestCodeRanges = !HasCustomIR,
+    .HasConstantCodeCheck = HasConstantCodeCheck,
   };
 }
 
@@ -813,7 +825,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
   }
 
   // Generate IR + Meta Info
-  auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges] =
+  auto [IRView, TotalInstructions, TotalInstructionsLength, StartAddr, Length, NeedsAddGuestCodeRanges, HasConstantCodeCheck] =
     GenerateIR(Thread, GuestRIP, Config.GDBSymbols() || Config.ExtendedDebugInfo(), MaxInst);
   if (!IRView) {
     Thread->FrontendDecoder->ValidateDisownedOrFree();
@@ -859,6 +871,7 @@ ContextImpl::CompileCodeResult ContextImpl::CompileCode(FEXCore::Core::InternalT
     .StartAddr = StartAddr,
     .Length = Length,
     .NeedsAddGuestCodeRanges = NeedsAddGuestCodeRanges,
+    .HasConstantCodeCheck = HasConstantCodeCheck,
   };
 }
 
@@ -958,7 +971,7 @@ ContextImpl::TryCompileBlock(FEXCore::Core::InternalThreadState* Thread, uint64_
   // Accumulate a JIT count now, as even if another thread raced us, it should count as a compile.
   FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedJITCount, 1);
 
-  auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
+  auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges, HasConstantCodeCheck] = CompileCode(Thread, GuestRIP, MaxInst);
   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
   if (CodePtr == nullptr) {
     return 0;
@@ -1055,7 +1068,7 @@ ContextImpl::TryCompileBlock(FEXCore::Core::InternalThreadState* Thread, uint64_
       std::span<const uint8_t> GuestCode = {reinterpret_cast<const uint8_t*>(StartAddr), Length};
       const Frontend::Decoder::DecodedBlockInformation* BlockInfo =
         NeedsAddGuestCodeRanges ? Thread->FrontendDecoder->GetDecodedBlockInfo() : nullptr;
-      DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo);
+      DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo, HasConstantCodeCheck);
     }
 
     if (CodeMapWriter && Region && Region->FileStartVA != 0) {
@@ -1089,7 +1102,7 @@ uintptr_t ContextImpl::CompileSingleStep(FEXCore::Core::CpuStateFrame* Frame, ui
   auto lk = GuardSignalDeferringSection<std::shared_lock>(CodeInvalidationMutex, Thread);
 
   Thread->FrontendDecoder->SetupDecodeInstructionsAtEntry(Thread, GuestRIP, 1);
-  auto [CompiledCode, DebugData, StartAddr, Length, _] = CompileCode(Thread, GuestRIP, 1);
+  auto [CompiledCode, DebugData, StartAddr, Length, _, _2] = CompileCode(Thread, GuestRIP, 1);
   auto CodePtr = CompiledCode.EntryPoints[GuestRIP];
   if (CodePtr == nullptr) {
     return 0;

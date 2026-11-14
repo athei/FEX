@@ -202,7 +202,8 @@ namespace DiskCache {
                   std::optional<ExecutableFileSectionInfo> Region);
     bool Store(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region, uint64_t GuestRIP, uint64_t GuestCodeKey,
                std::span<const uint8_t> GuestCode, const CPU::CPUBackend::CompiledCode& CompiledCode,
-               std::span<const FEXCore::CPU::Relocation> Relocations, const Frontend::Decoder::DecodedBlockInformation* DecodedBlockInfo);
+               std::span<const FEXCore::CPU::Relocation> Relocations, const Frontend::Decoder::DecodedBlockInformation* DecodedBlockInfo,
+               bool HasConstantCodeCheck);
     // Whether the guest's code at GuestRIP is still Hit.GuestCode, for a hit in writable memory once its pages are
     // trapped, as Decoder::WritableCodeUnchanged does for a compile
     bool GuestCodeUnchanged(uint64_t GuestRIP, const CodeHitData& Hit) const;

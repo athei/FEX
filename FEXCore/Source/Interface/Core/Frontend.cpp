@@ -20,6 +20,7 @@ $end_info$
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Profiler.h>
 #include <FEXCore/Utils/Telemetry.h>
@@ -154,10 +155,41 @@ uint8_t Decoder::ReadByte() {
   return *Byte;
 }
 
+// Returns how many of the Size bytes at Offset into the current instruction are in InstBytes, copying them from the
+// guest's memory on the first call for the instruction or the page. The intervals say what was executable when the
+// decoder asked, but another process can take the page away at any moment, as it doesn't wait for the code
+// invalidation mutex this compile holds. So the copy is fault-safe: a fault stops it, and the bytes from there on can't
+// be fetched, as outside the executable ranges. Only bytes CheckRangeExecutable passed are asked for, and a copy stops
+// at the end of their page: the next one can be a guard page, which a read would use up. So each copy starts at the
+// instruction or at a page, and its bytes are used only once it returns.
+uint8_t Decoder::FetchInstBytes(uint8_t Offset, uint8_t Size) {
+  const uint8_t* Start = InstStream.AdjustedInstStream;
+  if (Start != InstBytesStart) {
+    InstBytesStart = Start;
+    InstBytesSize = 0;
+    InstBytesFaulted = false;
+  }
+
+  const size_t End = std::min<size_t>(size_t {Offset} + Size, InstBytes.size());
+  while (InstBytesSize < End && !InstBytesFaulted) {
+    const auto From = reinterpret_cast<uint64_t>(Start) + InstBytesSize;
+    const auto PageEnd = (From & FEXCore::Utils::FEX_PAGE_MASK) + FEXCore::Utils::FEX_PAGE_SIZE;
+    const auto Want = std::min<uint64_t>(InstBytes.size() - InstBytesSize, PageEnd - From);
+    const auto Copied = FEXCore::ArchHelpers::Arm64::FaultSafeCopy(&InstBytes[InstBytesSize], reinterpret_cast<const void*>(From), Want);
+    InstBytesFaulted = Copied != Want;
+    // A copy that faults after some reads lost the page while it ran: none of the page can be fetched, as on hardware
+    if (!InstBytesFaulted) {
+      InstBytesSize += Copied;
+    }
+  }
+
+  return InstBytesSize > Offset ? std::min<size_t>(End, InstBytesSize) - Offset : 0;
+}
+
 std::optional<uint8_t> Decoder::PeekByte(uint8_t Offset) {
   uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize + Offset);
-  if (CheckRangeExecutable(ByteAddress, 1) == 1) {
-    return InstStream.AdjustedInstStream[InstructionSize + Offset];
+  if (CheckRangeExecutable(ByteAddress, 1) == 1 && FetchInstBytes(InstructionSize + Offset, 1) == 1) {
+    return InstBytes[InstructionSize + Offset];
   } else {
     return std::nullopt;
   }
@@ -174,7 +206,12 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   // See ReadByte
   auto ReadableSize = HitNonExecutableRange ? 0 : CheckRangeExecutable(Address, Size);
   if (ReadableSize == Size) {
-    std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
+    if (const auto Fetched = FetchInstBytes(InstructionSize, Size); Fetched != Size) {
+      ReadableSize = -int32_t {Fetched};
+    }
+  }
+  if (ReadableSize == Size) {
+    std::memcpy(&Res, &InstBytes[InstructionSize], Size);
   } else {
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
     Res = 0;
@@ -1808,8 +1845,11 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
 }
 
 bool Decoder::WritableCodeUnchanged() const {
+  // Fault-safe for the reason FetchInstBytes is. Bytes that can't be read now count as changed.
   return std::ranges::all_of(WritableInsts, [](const WritableInst& Inst) {
-    return std::memcmp(reinterpret_cast<const void*>(Inst.Address), Inst.Bytes.data(), Inst.Size) == 0;
+    std::array<uint8_t, MAX_INST_SIZE> Bytes;
+    return FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Bytes.data(), reinterpret_cast<const void*>(Inst.Address), Inst.Size) == Inst.Size &&
+           std::memcmp(Bytes.data(), Inst.Bytes.data(), Inst.Size) == 0;
   });
 }
 
@@ -1864,6 +1904,8 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
   BlockInfo.CodePages = {CurrentCodePage};
   BlockInfo.InWritableRange = false;
   WritableInsts.clear();
+  // A compile copies the guest's bytes again
+  InstBytesStart = nullptr;
 
   EntryBlock = true;
   FinalInstruction = false;

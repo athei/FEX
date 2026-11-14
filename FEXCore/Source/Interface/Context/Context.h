@@ -422,6 +422,8 @@ public:
     uint64_t StartAddr;
     uint64_t Length;
     bool NeedsAddGuestCodeRanges;
+    // A full SMC check couldn't read its instruction and always reports a change, so the block drops itself there
+    bool HasConstantCodeCheck;
   };
   [[nodiscard]]
   GenerateIRResult GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, bool ExtendedDebugInfo, uint64_t MaxInst);
@@ -432,6 +434,7 @@ public:
     uint64_t StartAddr;
     uint64_t Length;
     bool NeedsAddGuestCodeRanges;
+    bool HasConstantCodeCheck;
   };
   [[nodiscard]]
   CompileCodeResult CompileCode(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestRIP, uint64_t MaxInst = 0);

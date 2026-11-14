@@ -663,6 +663,11 @@ InvalidationTracker::FetchFault InvalidationTracker::HandleFetchFault(uint64_t A
   return FetchFault::Retry;
 }
 
+void InvalidationTracker::HandleCompileReadFault(uint64_t Address) {
+  std::unique_lock Lock(IntervalsLock);
+  FetchFaultPages[Address & FEXCore::Utils::FEX_PAGE_MASK] = ++FetchFaultGeneration;
+}
+
 FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint64_t Address) {
   {
     std::shared_lock Lock(IntervalsLock);

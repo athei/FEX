@@ -81,9 +81,17 @@ struct OpHandlers<IR::OP_F80CVTTO> {
   }
 };
 
+// clang for Windows ARM64 and ARM64EC can give a local of a preserve_all function the save slot of a callee-saved
+// register, and the epilogue then loads the local into that register (llvm/llvm-project#242966). In these handlers
+// the local was ScopedSoftFloatState's Frame, which ended up in guest RBX or R12. Each of them is a preserve_all
+// wrapper without locals around a normal-ABI Impl, which it must not inline.
 template<>
 struct OpHandlers<IR::OP_F80CMP> {
   FEXCORE_PRESERVE_ALL_ATTR static uint64_t handle(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Src2, Frame);
+  }
+
+  [[gnu::noinline]] static uint64_t Impl(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame};
 
@@ -187,18 +195,28 @@ struct OpHandlers<IR::OP_F80ROUND> {
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80F2XM1> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::F2XM1(&State.State, Src1);
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80TAN> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::FTAN(&State.State, Src1);
@@ -214,18 +232,28 @@ struct OpHandlers<IR::OP_F80SQRT> {
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80SIN> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::FSIN(&State.State, Src1);
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80COS> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::FCOS(&State.State, Src1);
@@ -293,18 +321,28 @@ struct OpHandlers<IR::OP_F80DIV> {
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80FYL2X> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Src2, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::FYL2X(&State.State, Src1, Src2);
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80FYL2XP1> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Src2, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     const X80SoftFloat One {&State.State, 1.0};
@@ -312,9 +350,14 @@ struct OpHandlers<IR::OP_F80FYL2XP1> {
   }
 };
 
+// See OpHandlers<IR::OP_F80CMP>.
 template<>
 struct OpHandlers<IR::OP_F80ATAN> {
   FEXCORE_PRESERVE_ALL_ATTR static VectorRegType handle(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
+    return Impl(FCW, Src1, Src2, Frame);
+  }
+
+  [[gnu::noinline]] static VectorRegType Impl(uint16_t FCW, VectorRegType Src1, VectorRegType Src2, FEXCore::Core::CpuStateFrame* Frame) {
     FEXCORE_PROFILE_INSTANT_INCREMENT(Frame->Thread, AccumulatedFloatFallbackCount, 1);
     ScopedSoftFloatState State {FCW, Frame, true};
     return X80SoftFloat::FATAN(&State.State, Src1, Src2);

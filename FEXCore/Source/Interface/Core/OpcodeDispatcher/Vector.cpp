@@ -6069,6 +6069,10 @@ void OpDispatchBuilder::Insertq(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::AVXVBCSTNEBF162PS(OpcodeArgs) {
+  if (!CTX->HostFeatures.SupportsBF16) {
+    UnimplementedOp(Op);
+    return;
+  }
   const auto DstSize = OpSizeFromDst(Op);
 
   auto Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
@@ -6082,6 +6086,11 @@ void OpDispatchBuilder::AVXVBCSTNEBF162PS(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::AVXVBCSTNESH2PS(OpcodeArgs) {
+  // Part of AVX_NE_CONVERT, which CPUID only reports with BF16.
+  if (!CTX->HostFeatures.SupportsBF16) {
+    UnimplementedOp(Op);
+    return;
+  }
   const auto DstSize = OpSizeFromDst(Op);
 
   auto Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
@@ -6094,6 +6103,11 @@ void OpDispatchBuilder::AVXVBCSTNESH2PS(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::AVXVCVTNEEPH2PS(OpcodeArgs, bool Even) {
+  // Part of AVX_NE_CONVERT, which CPUID only reports with BF16.
+  if (!CTX->HostFeatures.SupportsBF16) {
+    UnimplementedOp(Op);
+    return;
+  }
   const auto DstSize = OpSizeFromDst(Op);
 
   auto Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
@@ -6110,6 +6124,10 @@ void OpDispatchBuilder::AVXVCVTNEEPH2PS(OpcodeArgs, bool Even) {
 }
 
 void OpDispatchBuilder::AVXVCVTNEEBF162PS(OpcodeArgs, bool Even) {
+  if (!CTX->HostFeatures.SupportsBF16) {
+    UnimplementedOp(Op);
+    return;
+  }
   const auto DstSize = OpSizeFromDst(Op);
   auto Src = LoadSourceFPR(Op, Op->Src[0], Op->Flags);
 
@@ -6129,6 +6147,10 @@ void OpDispatchBuilder::AVXVCVTNEEBF162PS(OpcodeArgs, bool Even) {
 }
 
 void OpDispatchBuilder::AVXVCVTNEPS2BF16(OpcodeArgs) {
+  if (!CTX->HostFeatures.SupportsBF16) {
+    UnimplementedOp(Op);
+    return;
+  }
   const auto DstSize = OpSizeFromDst(Op);
   const auto Is128Bit = DstSize == OpSize::i128Bit;
 

@@ -1,0 +1,187 @@
+name: Hosted arm64 tests
+
+# Runs the ASM tests and InstructionCountCI on a GitHub-hosted arm64 Linux
+# runner, for branches that do not reach upstream's self-hosted runners.
+# The jobs configure and run as hostrunner.yml and the ARM64 leg of
+# instcountci.yml do, without the rootfs those runners mount and without
+# FEXConfig, which needs Qt.
+#
+# A push of an issue-* branch runs it too, so that a change can be tested
+# before it lands on macos-patched. workflow_dispatch reruns a branch the
+# workflow has already run on. Only macos-patched saves the compiler
+# caches; other branches restore them from there.
+
+on:
+  push:
+    branches:
+      - macos-patched
+      - 'issue-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a branch cancels the run it makes pointless.
+concurrency:
+  group: hosted-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+  CC: clang-18
+  CXX: clang++-18
+  CCACHE_MAXSIZE: 1G
+
+jobs:
+  asm_tests:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      FEX_PORTABLE: 1
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: '0'
+        fetch-tags: 'true'
+        persist-credentials: false
+
+    - name: Install the build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends clang-18 cmake ninja-build nasm python3 ccache
+        echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> "$GITHUB_ENV"
+
+    - name: Setup Build Environment
+      uses: ./.github/workflows/setup-env
+      with:
+        setup-rootfs: false
+
+    - name: Restore the compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/ccache
+        key: ccache-asm-clang18-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ccache-asm-clang18-
+
+    - name: Configure CMake
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -G Ninja -DENABLE_LTO=False \
+          -DENABLE_ASSERTIONS=True -DBUILD_FEXCONFIG=False
+
+    # These steps make a lot of noise but rarely fail.
+    # Put them in a separate step to make normal build logs easier to parse
+    - name: Noisy Build Targets
+      run: cmake --build build --target asm_files 32bit_asm_files
+
+    - name: Build
+      run: cmake --build build --target TestHarnessRunner
+
+    - name: Save the compiler cache
+      if: github.ref == 'refs/heads/macos-patched'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/ccache
+        key: ccache-asm-clang18-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Compiler cache statistics
+      run: ccache --show-stats
+
+    # Runs the 64-bit and the 32-bit ASM tests.
+    - name: ASM Tests
+      uses: ./.github/workflows/test
+      with:
+        target: asm_tests
+
+    - name: Upload results
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      timeout-minutes: 1
+      with:
+        name: Results-asm_tests
+        path: results/*.log
+        retention-days: 7
+
+  instcountci_tests:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: '0'
+        fetch-tags: 'true'
+        persist-credentials: false
+
+    - name: Install the build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends clang-18 cmake ninja-build nasm python3 ccache
+        echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> "$GITHUB_ENV"
+
+    - name: Setup Build Environment
+      uses: ./.github/workflows/setup-env
+      with:
+        setup-rootfs: false
+
+    - name: Restore the compiler cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/ccache
+        key: ccache-instcountci-clang18-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: ccache-instcountci-clang18-
+
+    - name: Configure CMake
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -G Ninja -DENABLE_VIXL_SIMULATOR=False \
+          -DENABLE_VIXL_DISASSEMBLER=True -DENABLE_LTO=False -DENABLE_ASSERTIONS=True -DBUILD_FEXCONFIG=False
+
+    - name: Build
+      id: build
+      env:
+        FEX_DISABLETELEMETRY: 1
+      run: cmake --build build --target CodeSizeValidation instcountci_test_files
+
+    - name: Save the compiler cache
+      if: github.ref == 'refs/heads/macos-patched'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/ccache
+        key: ccache-instcountci-clang18-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Compiler cache statistics
+      run: ccache --show-stats
+
+    - name: Instruction Count Tests
+      uses: ./.github/workflows/test
+      with:
+        target: instcountci_tests
+
+    # A failed count still updates the listings, so the diff shows what
+    # changed.
+    - name: Update local repo instcount
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: cmake --build build --target instcountci_update_tests
+
+    # The regenerated listings as a patch that applies to this commit, since
+    # CodeSizeValidation needs an arm64 Linux host.
+    - name: Save the listing diff
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: |
+        mkdir -p results
+        git --no-pager diff HEAD > results/instcountci.patch
+
+    - name: Check InstCountCI diff
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: git --no-pager diff --exit-code HEAD
+
+    - name: Upload results
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      timeout-minutes: 1
+      with:
+        name: Results-instcountci_tests
+        path: |
+          results/*.log
+          results/*.patch
+        retention-days: 7

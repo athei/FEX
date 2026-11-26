@@ -1228,7 +1228,15 @@ namespace DiskCache {
     //   }
     // }
     uint8_t* GuestCodeCopy = BlobData + GuestCodeOffset;
-    if (!CopyGuestCode(GuestCodeCopy, reinterpret_cast<uint64_t>(GuestCode.data()), GuestCode.size())) {
+    const auto GuestCodeAddress = reinterpret_cast<uint64_t>(GuestCode.data());
+    if (!CopyGuestCode(GuestCodeCopy, GuestCodeAddress, GuestCode.size())) {
+      return false;
+    }
+    // A hit runs the block for code with the hash taken below, so the copy has to hold the bytes it was compiled from.
+    // Another process can change code that this one can't write to at any moment, see CopyGuestCode, and nothing checks
+    // such code for changes during the compile, as Decoder::WritableCodeUnchanged does for writable code.
+    if (!Thread->FrontendDecoder->CodeMatchesDecoded(GuestCodeAddress, {GuestCodeCopy, GuestCode.size()})) {
+      LogMan::Msg::IFmt("DiskCache: not storing the block at {:#x}, its code changed after it was decoded", GuestRIP);
       return false;
     }
     {

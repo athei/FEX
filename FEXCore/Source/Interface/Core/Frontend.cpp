@@ -231,9 +231,10 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
     HitNonExecutableRange = true;
   }
 
-  // WritableCodeUnchanged compares Instruction with the guest's memory, so it gets the bytes this read took, not a
-  // second read of them. A field that wasn't read, or that ends past the length limit, ends what is compared. All of
-  // Res is stored, which needs no call: the bytes past the field are zero, as they were, until a later read stores them.
+  // WritableCodeUnchanged and CodeMatchesDecoded compare Instruction with the guest's memory, so it gets the bytes this
+  // read took, not a second read of them. A field that wasn't read, or that ends past the length limit, ends what is
+  // compared. All of Res is stored, which needs no call: the bytes past the field are zero, as they were, until a later
+  // read stores them.
   if (ReadableSize == Size && size_t {FieldOffset} + Size <= MAX_INST_SIZE) [[likely]] {
     std::memcpy(&Instruction[FieldOffset], &Res, sizeof(Res));
   } else {
@@ -1623,6 +1624,8 @@ void Decoder::PruneInlinedBranchDataMasks() {
 void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
   // counter-intuitively, the masks are also needed for lookup on anon prefix decodes, not just stores
   bool WantsDataMasks = CTX->DiskCache.IsReadingDiskCache() || CTX->DiskCache.IsWritingDiskCache();
+  // For DiskCache::Store, see CodeMatchesDecoded
+  const bool KeepsAllInsts = CTX->DiskCache.IsWritingDiskCache();
 
   while (!FinalInstruction && (Paused || !BlocksToDecode.empty())) {
     bool Pausing = false;
@@ -1702,10 +1705,11 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
       // Cleared so that it says after the decode whether this instruction has a byte in a writable range
       const bool WasInWritableRange = std::exchange(BlockInfo.InWritableRange, false);
       BlockIt->BlockStatus = DecodeInstruction(OpAddress);
-      if (BlockInfo.InWritableRange) {
-        auto& Inst = WritableInsts.emplace_back();
+      if (BlockInfo.InWritableRange || KeepsAllInsts) {
+        auto& Inst = FetchedInsts.emplace_back();
         Inst.Address = OpAddress;
         Inst.Size = std::min(InstructionSize, UnfetchedOffset);
+        Inst.Writable = BlockInfo.InWritableRange;
         std::copy_n(Instruction.begin(), Inst.Bytes.size(), Inst.Bytes.begin());
       }
       BlockInfo.InWritableRange |= WasInWritableRange;
@@ -1846,10 +1850,20 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
 
 bool Decoder::WritableCodeUnchanged() const {
   // Fault-safe for the reason FetchInstBytes is. Bytes that can't be read now count as changed.
-  return std::ranges::all_of(WritableInsts, [](const WritableInst& Inst) {
+  return std::ranges::all_of(FetchedInsts, [](const FetchedInst& Inst) {
     std::array<uint8_t, MAX_INST_SIZE> Bytes;
-    return FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Bytes.data(), reinterpret_cast<const void*>(Inst.Address), Inst.Size) == Inst.Size &&
-           std::memcmp(Bytes.data(), Inst.Bytes.data(), Inst.Size) == 0;
+    return !Inst.Writable ||
+           (FEXCore::ArchHelpers::Arm64::FaultSafeCopy(Bytes.data(), reinterpret_cast<const void*>(Inst.Address), Inst.Size) == Inst.Size &&
+            std::memcmp(Bytes.data(), Inst.Bytes.data(), Inst.Size) == 0);
+  });
+}
+
+bool Decoder::CodeMatchesDecoded(uint64_t Address, std::span<const uint8_t> Code) const {
+  // Each instruction of the decoded blocks lies in Code, which spans them. One that lies outside of it was decoded and
+  // then left out, see DecodeLoop.
+  return std::ranges::all_of(FetchedInsts, [&](const FetchedInst& Inst) {
+    return Inst.Address < Address || Inst.Address - Address + Inst.Size > Code.size() ||
+           std::memcmp(Code.data() + (Inst.Address - Address), Inst.Bytes.data(), Inst.Size) == 0;
   });
 }
 
@@ -1903,7 +1917,7 @@ void Decoder::SetupDecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState*
 
   BlockInfo.CodePages = {CurrentCodePage};
   BlockInfo.InWritableRange = false;
-  WritableInsts.clear();
+  FetchedInsts.clear();
   // A compile copies the guest's bytes again
   InstBytesStart = nullptr;
 

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace FEXCore::Context {
 class ContextImpl;
@@ -99,6 +100,10 @@ public:
   // Whether the instructions decoded from ranges the guest can write to are still in its memory as the decoder read
   // them. The caller has their pages trapped for writes, so the answer holds until a write faults.
   bool WritableCodeUnchanged() const;
+
+  // Whether Code, a copy of the guest's memory at Address, holds every decoded instruction that lies in it as the
+  // decoder read it. The decoder keeps all instructions for this only while the disk cache is written.
+  bool CodeMatchesDecoded(uint64_t Address, std::span<const uint8_t> Code) const;
 
 private:
   // To pass any information from instruction prefixes
@@ -212,14 +217,16 @@ private:
   uint8_t LastEscapePrefix {};
   FEXCore::X86Tables::DecodedInst* DecodeInst;
 
-  // An instruction with a byte in a range the guest can write to, and what the decoder read of it. The decoder reads
-  // each byte it decodes from once, so the decoded instruction is a function of Bytes alone.
-  struct WritableInst {
+  // An instruction and what the decoder read of it. The decoder reads each byte it decodes from once, so the decoded
+  // instruction is a function of Bytes alone. Kept for each instruction with a byte in a range the guest can write to,
+  // which is Writable, and while the disk cache is written for all of them.
+  struct FetchedInst {
     uint64_t Address;
     uint8_t Size;
+    bool Writable;
     std::array<uint8_t, MAX_INST_SIZE> Bytes;
   };
-  fextl::vector<WritableInst> WritableInsts;
+  fextl::vector<FetchedInst> FetchedInsts;
 
   // This is for multiblock data tracking
   uint64_t EntryPoint {};

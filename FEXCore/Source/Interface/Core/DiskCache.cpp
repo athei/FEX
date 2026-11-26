@@ -1250,6 +1250,14 @@ namespace DiskCache {
     memcpy(BlobData + HeaderOffset, &Header, sizeof(Header));
 
     auto RangeInfo = CTX->SyscallHandler->QueryGuestExecutableRange(Thread, GuestRIP);
+    // The key takes the range's protection now, the code was generated for the ranges the decoder read: without a
+    // writable one it writes the MMX registers and the upper YMM halves back only at the end of the block, see
+    // SetWriteBackVectorCacheEachInst. A protect of another thread or process can make the range writable during the
+    // compile, and a hit under the writable key would then lose them on inline SMC.
+    if (RangeInfo.Writable && !DecodedBlockInfo->InWritableRange) {
+      LogMan::Msg::IFmt("DiskCache: not storing the block at {:#x}, its range became writable after it was decoded", GuestRIP);
+      return false;
+    }
     uint64_t LookupKey =
       MakeLookupKey(Thread, GuestCodeKey, RangeInfo.Writable, GuestRIP == CTX->GetMonoBackPatcherBlock().load(std::memory_order_relaxed));
 
